@@ -1,0 +1,16 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+.env
+.DS_Store
+.ipynb_checkpoints/
+*.egg-info/
+dist/
+build/
+
+# Локальные результаты игры
+Results.txt
