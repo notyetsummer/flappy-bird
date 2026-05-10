@@ -103,9 +103,26 @@ width, height = size
 name = ["John Doe"]
 difficulty = [1]
 
+# Опции раунда (меняются в меню до «Играть»)
+opt_enable_nitro = [True]
+opt_enable_shield = [True]
+opt_enable_double_jump = [True]
+
 
 def set_difficulty(_, y):
     difficulty.append(y)
+
+
+def set_opt_nitro(_, value):
+    opt_enable_nitro[0] = value
+
+
+def set_opt_shield(_, value):
+    opt_enable_shield[0] = value
+
+
+def set_opt_double_jump(_, value):
+    opt_enable_double_jump[0] = value
 
 
 def MyTextValue(Player_name):
@@ -417,6 +434,9 @@ def spawn_pipe_pair(
 
 def start_the_game():
     tn = TUNING
+    enable_nitro = opt_enable_nitro[0]
+    enable_shield = opt_enable_shield[0]
+    enable_double_jump = opt_enable_double_jump[0]
     clock = pygame.time.Clock()
     ground_h = tn.GROUND_HEIGHT
     pipe_w = tn.PIPE_WIDTH
@@ -564,12 +584,12 @@ def start_the_game():
             if jump_buffer_remaining > 0:
                 if attempt_flap():
                     jump_buffer_remaining = 0.0
-                elif attempt_double_jump_only():
+                elif enable_double_jump and attempt_double_jump_only():
                     jump_buffer_remaining = 0.0
                 else:
                     jump_buffer_remaining = max(0.0, jump_buffer_remaining - dt)
 
-        if not end_flag:
+        if not end_flag and enable_nitro:
             keys = pygame.key.get_pressed()
             if keys[pygame.K_SPACE] and nitro_fuel > 0:
                 nitro_fuel -= tn.NITRO_DRAIN_PER_FRAME
@@ -585,8 +605,12 @@ def start_the_game():
             hit_ceiling = bh.colliderect(ce_rect)
             hit_floor = bh.bottom >= height - ground_h
 
-            shield_buff = shield_until_gt >= 0 and game_time < shield_until_gt
-            if shield_until_gt >= 0 and game_time >= shield_until_gt:
+            shield_buff = (
+                enable_shield
+                and shield_until_gt >= 0
+                and game_time < shield_until_gt
+            )
+            if enable_shield and shield_until_gt >= 0 and game_time >= shield_until_gt:
                 shield_until_gt = -1.0
 
             for i in range(wall_counter):
@@ -600,17 +624,18 @@ def start_the_game():
                 orb = aura_orbs[i]
                 ox_c = list_wall[i].centerx
                 oy_c = (list_wall2[i].bottom + list_wall[i].top) // 2
-                if (
-                    not orb["collected"]
-                    and game_time < orb["expire_at"]
-                    and list_wall[i].right > -pipe_w
-                ):
-                    bird_r = max(bh.width, bh.height) * 0.55
-                    dx = bh.centerx - ox_c
-                    dy = bh.centery - oy_c
-                    if dx * dx + dy * dy <= (tn.AURA_ORB_RADIUS + bird_r) ** 2:
-                        orb["collected"] = True
-                        shield_until_gt = game_time + tn.AURA_SHIELD_SEC
+                if enable_shield:
+                    if (
+                        not orb["collected"]
+                        and game_time < orb["expire_at"]
+                        and list_wall[i].right > -pipe_w
+                    ):
+                        bird_r = max(bh.width, bh.height) * 0.55
+                        dx = bh.centerx - ox_c
+                        dy = bh.centery - oy_c
+                        if dx * dx + dy * dy <= (tn.AURA_ORB_RADIUS + bird_r) ** 2:
+                            orb["collected"] = True
+                            shield_until_gt = game_time + tn.AURA_SHIELD_SEC
 
                 if list_wall[i].right < -pipe_w:
                     pipe_passed[i] = False
@@ -643,7 +668,7 @@ def start_the_game():
                     invuln_now = invuln_until_gt >= 0 and game_time < invuln_until_gt
                     if invuln_now:
                         pass
-                    elif shield_buff:
+                    elif enable_shield and shield_buff:
                         invuln_until_gt = game_time + tn.AURA_PIPE_INVINCIBLE_SEC
                     else:
                         end_flag = True
@@ -676,12 +701,13 @@ def start_the_game():
         for i in range(wall_counter):
             draw_pipe(world, list_wall2[i], flip=False)
             draw_pipe(world, list_wall[i], flip=True)
-            orb = aura_orbs[i]
-            if not orb["collected"] and game_time < orb["expire_at"]:
-                ocx = list_wall[i].centerx
-                ocy = (list_wall2[i].bottom + list_wall[i].top) // 2
-                if list_wall[i].right > -tn.AURA_ORB_RADIUS and list_wall[i].left < width + tn.AURA_ORB_RADIUS:
-                    draw_gap_aura_orb(world, ocx, ocy, tn.AURA_ORB_RADIUS, game_time + i * 0.7)
+            if enable_shield:
+                orb = aura_orbs[i]
+                if not orb["collected"] and game_time < orb["expire_at"]:
+                    ocx = list_wall[i].centerx
+                    ocy = (list_wall2[i].bottom + list_wall[i].top) // 2
+                    if list_wall[i].right > -tn.AURA_ORB_RADIUS and list_wall[i].left < width + tn.AURA_ORB_RADIUS:
+                        draw_gap_aura_orb(world, ocx, ocy, tn.AURA_ORB_RADIUS, game_time + i * 0.7)
 
         draw_ground(world, scroll_accum, game_time, ground_h)
 
@@ -697,7 +723,7 @@ def start_the_game():
         world.blit(bird_draw, br)
         inv_draw = invuln_until_gt >= 0 and game_time < invuln_until_gt
         sh_draw = shield_until_gt >= 0 and game_time < shield_until_gt
-        if inv_draw or sh_draw:
+        if enable_shield and (inv_draw or sh_draw):
             draw_shield_overlay(world, br, blink_on=inv_draw, t=game_time)
 
         screen.fill((12, 18, 28))
@@ -718,19 +744,33 @@ def start_the_game():
         screen.blit(score_text, (sx, sy))
 
         nf = pygame.font.SysFont(sysfont_name, 20)
-        line1 = nf.render(
-            "SPACE — взмах / удержание — нитро", True, (248, 250, 255)
-        )
-        line2 = nf.render(
-            "Сфера в щели → щит: удар по трубе = 1 с неуязвимости",
-            True, (200, 230, 255),
-        )
-        screen.blit(line1, (28 + ox, sy + 50))
-        screen.blit(line2, (28 + ox, sy + 72))
-        nitro_frac = nitro_fuel / max(1e-6, tn.NITRO_MAX_UNITS)
-        draw_nitro_bar(screen, 28 + ox, height - 42 + oy, 200, 14, nitro_frac)
-        lb = pygame.font.SysFont(sysfont_name, 16).render("НИТРО", True, (180, 200, 220))
-        screen.blit(lb, (28 + ox, height - 59 + oy))
+        hint_y = sy + 50
+        htxt_v = "SPACE — взмах"
+        if enable_nitro:
+            htxt_v += " / удержание — нитро"
+        screen.blit(nf.render(htxt_v, True, (248, 250, 255)), (28 + ox, hint_y))
+        hint_y += 22
+        if enable_double_jump:
+            screen.blit(
+                nf.render("При блокировке взмеха доступен двойной подъём (раз в кулдаун)", True, (210, 225, 245)),
+                (28 + ox, hint_y),
+            )
+            hint_y += 22
+        if enable_shield:
+            screen.blit(
+                nf.render(
+                    "Сфера в щели → щит: удар по трубе = 1 с неуязвимости",
+                    True,
+                    (200, 230, 255),
+                ),
+                (28 + ox, hint_y),
+            )
+            hint_y += 22
+        if enable_nitro:
+            nitro_frac = nitro_fuel / max(1e-6, tn.NITRO_MAX_UNITS)
+            draw_nitro_bar(screen, 28 + ox, height - 42 + oy, 200, 14, nitro_frac)
+            lb = pygame.font.SysFont(sysfont_name, 16).render("НИТРО", True, (180, 200, 220))
+            screen.blit(lb, (28 + ox, height - 59 + oy))
 
         if end_flag:
             if not saved_results:
@@ -766,6 +806,21 @@ screen = pygame.display.set_mode(size)
 menu = pygame_menu.Menu("Добро пожаловать", width, height, theme=pygame_menu.themes.THEME_BLUE)
 menu.add.text_input("Имя:", default="John Doe", onchange=MyTextValue)
 menu.add.selector("Сложность:", [("Сложно", 1), ("Легко", 2)], onchange=set_difficulty)
+menu.add.selector(
+    "Нитро:",
+    [("Вкл.", True), ("Выкл.", False)],
+    onchange=set_opt_nitro,
+)
+menu.add.selector(
+    "Щит (аура в щели):",
+    [("Вкл.", True), ("Выкл.", False)],
+    onchange=set_opt_shield,
+)
+menu.add.selector(
+    "Двойной подъём:",
+    [("Вкл.", True), ("Выкл.", False)],
+    onchange=set_opt_double_jump,
+)
 menu.add.button("Играть", start_the_game)
 menu.add.button("Выход", pygame_menu.events.EXIT)
 menu.add.button("——————————————————")
