@@ -10,6 +10,94 @@ import pygame_menu
 BASE_DIR = Path(__file__).resolve().parent
 ASSETS_DIR = BASE_DIR / "assets"
 
+
+# ---------- Flappy Bird: всё ручное управление геймплеем (редактируйте здесь) ----------
+class FlappyTuning:
+    """Собранные параметры баланса. Значения ниже — стартовые; подбирайте по вкусу."""
+
+    # Кадры
+    TARGET_FPS = 60
+    # Логика изначально ориентировалась на ~120 шагов/с: при другом TARGET_FPS масштаб шага.
+    STEP_SCALE = 120 / TARGET_FPS
+
+    # Физика птицы (шаг за один кадр при TARGET_FPS; главный рычаг «как тяжело падает»)
+    GRAVITY_PER_FRAME = 0.30
+    FLAP_IMPULSE = -8.2
+    # Усиление гравитации после смерти (дольше «доусыпать» вниз)
+    DEATH_GRAVITY_MULT = 0.6
+    # Отсечение подъёма при отпускании Space (укороченный взмах). False = все взмахи одной силы.
+    SHORT_FLAP_ON_KEYUP = False
+    JUMP_CUT_MULT = 0.48
+    # Буфер «хочу взмахнуть» до срабатывания (сек)
+    INPUT_BUFFER_SEC = 0.12
+    # Режим «Сложно»: минимум между двумя взмахами (сек)
+    HARD_FLAP_COOLDOWN_SEC = 0.5
+
+    # Двойной прыжок: не скорость, а сдвиг вверх на фиксированное число пикселей
+    # от положения в момент нажатия (rect.y меньше = выше на экране).
+    DOUBLE_JUMP_COOLDOWN_SEC = 3.0
+    DOUBLE_JUMP_RISE_PX = 72
+
+    # Нитро: зажат Space — расход топлива и подъём за кадр; отжал — только обычная физика
+    NITRO_MAX_UNITS = 100.0
+    NITRO_DRAIN_PER_FRAME = 2.15
+    NITRO_LIFT_PER_FRAME = -0.62
+
+    # Сфера-аура в щели между трубами: висит AURA_ORB_HANG_SEC, после сбора — щит AURA_SHIELD_SEC
+    AURA_ORB_HANG_SEC = 30.0
+    AURA_ORB_RADIUS = 26
+    AURA_SHIELD_SEC = 30.0
+    # При ударе о трубу под щитом — неуязвимость (проходит сквозь коллизию по трубе)
+    AURA_PIPE_INVINCIBLE_SEC = 1.0
+
+    # Препятствия и уровень
+    GROUND_HEIGHT = 110
+    PIPE_WIDTH = 88
+    PIPE_SPACING = 340
+    # Диапазон размера щели (пикс.) — чем шире кортеж, тем сильнее разброс высоты столбов
+    GAP_EASY = (190, 265)
+    GAP_HARD = (160, 220)
+    # «Виртуальная» скорость труб (как раньше int() давала шаг в пикселях после STEP_SCALE)
+    PIPE_SPEED = 2.8
+    # Сдвиг по X при первом спавне труб: width + i*spacing + random
+    PIPE_SPAWN_X_JITTER = (0, 80)
+    # Новая труба: mx + spacing + random(мин, макс)
+    PIPE_RESPAWN_SPACING_EXTRA = (-40, 120)
+    # Вертикальные поля — случайная высота щели: меньше = больше амплитуда по Y
+    PIPE_GAP_VERTICAL_MARGIN = 150
+
+    # Хитбоксы: пикселей с каждой стороны внутрь (больше число = меньше хитбокс vs спрайт)
+    BIRD_HIT_INSET = 9
+    PIPE_HIT_INSET = 5
+
+    # Границы полёта птицы
+    BIRD_START_X = 220
+    CEILING_TOP = -40
+    CEILING_HEIGHT = 42
+    BIRD_Y_CLAMP_TOP = -30
+
+    # Скорость анимации кадров птицы
+    BIRD_ANIM_SPEED = 5
+    BIRD_SPRITE_SIZE = (56, 42)
+
+    # Эффекты
+    SHAKE_ON_DEATH = 14.0
+    SHAKE_DECAY = 0.88
+    DEATH_TILT_SPEED = 400.0
+    DEATH_TILT_MAX = 75.0
+
+    def pipe_dx(self):
+        """Пикселей сдвига труб за кадр (целое)."""
+        return max(1, int(int(self.PIPE_SPEED) * self.STEP_SCALE))
+
+    def scroll_step(self):
+        """Прокрутка земли за кадр (как раньше, согласовано с трубами)."""
+        return float(int(self.PIPE_SPEED)) * self.STEP_SCALE
+
+
+TUNING = FlappyTuning()
+
+
 size = (1200, 800)
 width, height = size
 name = ["John Doe"]
@@ -99,6 +187,38 @@ def load_bird_frames(target_size):
     return out
 
 
+def draw_nitro_bar(surface, x, y, w, h, frac):
+    frac = max(0.0, min(1.0, frac))
+    bg = (40, 50, 70)
+    fill = (255, 120, 40) if frac < 0.25 else (80, 200, 255)
+    pygame.draw.rect(surface, bg, (x, y, w, h), border_radius=4)
+    if frac > 0:
+        pygame.draw.rect(surface, fill, (x + 2, y + 2, int((w - 4) * frac), h - 4), border_radius=3)
+
+
+def draw_gap_aura_orb(surface, cx, cy, r, pulse_t):
+    d = max(r * 2 + 18, 32)
+    s = pygame.Surface((d, d), pygame.SRCALPHA)
+    pr = max(8, int(r + 5 * math.sin(pulse_t * 4)))
+    ctr = (d // 2, d // 2)
+    pygame.draw.circle(s, (100, 220, 255, 70), ctr, pr)
+    pygame.draw.circle(s, (200, 255, 255, 160), ctr, max(6, pr - 6), width=4)
+    pygame.draw.circle(s, (255, 255, 255, 220), ctr, max(4, pr - 14), width=2)
+    surface.blit(s, (int(cx - d // 2), int(cy - d // 2)))
+
+
+def draw_shield_overlay(surface, br, blink_on, t):
+    """Кольца вокруг птицы: щит (голубое) или мигание при короткой неуязвимости."""
+    ctr = br.center
+    r = max(br.width, br.height) // 2 + 12
+    a = min(210, int(140 + 70 * math.sin(t * 6))) if blink_on else 165
+    s = pygame.Surface((br.width + 56, br.height + 56), pygame.SRCALPHA)
+    c0 = (s.get_width() // 2, s.get_height() // 2)
+    pygame.draw.circle(s, (80, 220, 255, a), c0, r, width=3)
+    pygame.draw.circle(s, (255, 255, 255, min(a, 90)), c0, r - 5, width=2)
+    surface.blit(s, (br.centerx - c0[0], br.centery - c0[1]))
+
+
 def draw_gradient_sky(surface, t):
     top = (120 + int(15 * math.sin(t * 0.15)), 185 + int(10 * math.cos(t * 0.12)), 230)
     mid = (170 + int(10 * math.sin(t * 0.2)), 215, 235)
@@ -107,15 +227,11 @@ def draw_gradient_sky(surface, t):
         k = y / height
         if k < 0.55:
             u = k / 0.55
-            c = (
-                int(top[i] + (mid[i] - top[i]) * u) for i in range(3)
-            )
+            col = tuple(int(top[i] + (mid[i] - top[i]) * u) for i in range(3))
         else:
             u = (k - 0.55) / 0.45
-            c = (
-                int(mid[i] + (bot[i] - mid[i]) * u) for i in range(3)
-            )
-        pygame.draw.line(surface, tuple(c), (0, y), (width, y))
+            col = tuple(int(mid[i] + (bot[i] - mid[i]) * u) for i in range(3))
+        pygame.draw.line(surface, col, (0, y), (width, y))
 
 
 def init_clouds():
@@ -220,8 +336,7 @@ def draw_grass_strip(surface, scroll, t, ground_top):
         pygame.draw.lines(surface, green, False, [(bx, ground_top), (tip_x, tip_y)], 2)
 
 
-def draw_ground(surface, scroll, t):
-    ground_h = 110
+def draw_ground(surface, scroll, t, ground_h):
     top_y = height - ground_h
     soil_dark = (92, 62, 42)
     soil = (135, 92, 58)
@@ -274,11 +389,24 @@ def draw_pipe(surface, rect, flip=False):
     pygame.draw.rect(surface, dark, cap.inflate(-4, 0), width=2, border_radius=8)
 
 
-def spawn_pipe_pair(index, spacing, pipe_w, gap_min, gap_max, ground_h):
-    x = width + index * spacing + random.randint(0, 80)
+def spawn_pipe_pair(
+    index,
+    spacing,
+    pipe_w,
+    gap_min,
+    gap_max,
+    ground_h,
+    *,
+    x_jitter=(0, 80),
+    vertical_margin=180,
+):
+    x = width + index * spacing + random.randint(*x_jitter)
     full_gap = random.randint(gap_min, gap_max)
     gap_half = full_gap // 2
-    cy = random.randint(180 + gap_half, height - ground_h - 180 - gap_half)
+    cy = random.randint(
+        vertical_margin + gap_half,
+        height - ground_h - vertical_margin - gap_half,
+    )
     top_h = cy - gap_half
     bot_top = cy + gap_half
     bot_h = height - ground_h - bot_top
@@ -288,13 +416,15 @@ def spawn_pipe_pair(index, spacing, pipe_w, gap_min, gap_max, ground_h):
 
 
 def start_the_game():
+    tn = TUNING
     clock = pygame.time.Clock()
-    ground_h = 110
-    pipe_w = 88
-    spacing = 340
-    gap_easy = (210, 240)
-    gap_hard = (175, 205)
-    pipe_speed = 2.8
+    ground_h = tn.GROUND_HEIGHT
+    pipe_w = tn.PIPE_WIDTH
+    spacing = tn.PIPE_SPACING
+    gap_easy = tn.GAP_EASY
+    gap_hard = tn.GAP_HARD
+    pipe_dx = tn.pipe_dx()
+    scroll_step = tn.scroll_step()
 
     gap_rng = gap_hard if difficulty[-1] == 1 else gap_easy
     wall_counter = max(3, int(width / spacing) + 2)
@@ -302,9 +432,9 @@ def start_the_game():
     screen = pygame.display.set_mode(size)
     pygame.display.set_caption("Flappy Bird — улучшенная версия")
 
-    bird_size = (56, 42)
+    bird_size = tn.BIRD_SPRITE_SIZE
     Player_Sprite = load_bird_frames(bird_size)
-    anim_speed = 5
+    anim_speed = tn.BIRD_ANIM_SPEED
 
     clouds = init_clouds()
     wind_parts = init_wind_particles()
@@ -313,18 +443,40 @@ def start_the_game():
     list_wall2 = []
     pipe_passed = []
     for i in range(wall_counter):
-        tr, br = spawn_pipe_pair(i, spacing, pipe_w, gap_rng[0], gap_rng[1], ground_h)
+        tr, br = spawn_pipe_pair(
+            i,
+            spacing,
+            pipe_w,
+            gap_rng[0],
+            gap_rng[1],
+            ground_h,
+            x_jitter=tn.PIPE_SPAWN_X_JITTER,
+            vertical_margin=tn.PIPE_GAP_VERTICAL_MARGIN,
+        )
         list_wall2.append(tr)
         list_wall.append(br)
         pipe_passed.append(False)
 
-    rect = pygame.Rect(220, height // 2, bird_size[0], bird_size[1])
+    # Сферы ауры привязаны к индексу пары труб: expire — абсолютное game_time, collected — подобрана
+    aura_orbs = []
+    for _i in range(wall_counter):
+        aura_orbs.append(
+            {"expire_at": tn.AURA_ORB_HANG_SEC, "collected": False},
+        )
+
+    nitro_fuel = tn.NITRO_MAX_UNITS
+    shield_until_gt = -1.0
+    invuln_until_gt = -1.0
+
+    rect = pygame.Rect(tn.BIRD_START_X, height // 2, bird_size[0], bird_size[1])
     speed_y = 0.0
-    gravity = 0.42
-    flap_impulse = -8.2
+    gravity = tn.GRAVITY_PER_FRAME
+    flap_impulse = tn.FLAP_IMPULSE
 
     space_time_0 = -1.0
     space_time_1 = 1.0
+    jump_buffer_remaining = 0.0
+    next_double_jump_at = 0.0
 
     points = 0
     scroll_accum = 0.0
@@ -341,8 +493,53 @@ def start_the_game():
     game_time = 0.0
     saved_results = False
 
+    def bird_hit_rect():
+        return pygame.Rect(rect).inflate(-2 * tn.BIRD_HIT_INSET, -2 * tn.BIRD_HIT_INSET)
+
+    def pipe_hit_rect(pr):
+        return pygame.Rect(pr).inflate(-2 * tn.PIPE_HIT_INSET, -2 * tn.PIPE_HIT_INSET)
+
+    def attempt_flap():
+        nonlocal speed_y, space_time_0, space_time_1
+        if rect.top <= 10:
+            return False
+        if difficulty[-1] == 1:
+            now = time.time()
+            if space_time_0 == -1:
+                space_time_0 = now
+                speed_y = flap_impulse
+                return True
+            space_time_1 = now
+            if space_time_1 - space_time_0 > tn.HARD_FLAP_COOLDOWN_SEC:
+                speed_y = flap_impulse
+                space_time_0 = space_time_1
+                return True
+            return False
+        speed_y = flap_impulse
+        return True
+
+    def try_double_jump_rise():
+        """Поднять птицу на DOUBLE_JUMP_RISE_PX от текущей позиции (без путаницы со скоростью)."""
+        nonlocal rect, next_double_jump_at
+        now = time.time()
+        if now < next_double_jump_at:
+            return False
+        if rect.top <= 10:
+            return False
+        rect.y -= tn.DOUBLE_JUMP_RISE_PX
+        rect.y = max(
+            tn.BIRD_Y_CLAMP_TOP,
+            min(rect.y, height - ground_h - rect.height),
+        )
+        next_double_jump_at = now + tn.DOUBLE_JUMP_COOLDOWN_SEC
+        return True
+
+    def attempt_double_jump_only():
+        """Когда обычный взмах не прошёл — фиксированный подъём (не суммировать с взмахом в тот же кадр)."""
+        return try_double_jump_rise()
+
     while running:
-        dt = clock.tick(120) / 1000.0
+        dt = clock.tick(tn.TARGET_FPS) / 1000.0
         dt = min(dt, 0.05)
         game_time += dt
 
@@ -352,70 +549,116 @@ def start_the_game():
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
                 if end_flag:
                     return
-                if rect.top > 10:
-                    if difficulty[-1] == 1:
-                        now = time.time()
-                        if space_time_0 == -1:
-                            space_time_0 = now
-                            speed_y = flap_impulse
-                        else:
-                            space_time_1 = now
-                            if space_time_1 - space_time_0 > 1:
-                                speed_y = flap_impulse
-                                space_time_0 = space_time_1
-                    else:
-                        speed_y = flap_impulse
+                jump_buffer_remaining = tn.INPUT_BUFFER_SEC
+            elif event.type == pygame.KEYUP and event.key == pygame.K_SPACE:
+                if (
+                    tn.SHORT_FLAP_ON_KEYUP
+                    and not end_flag
+                    and speed_y < 0
+                ):
+                    speed_y *= tn.JUMP_CUT_MULT
 
-        ce_rect = pygame.Rect(0, -40, width, 42)
+        ce_rect = pygame.Rect(0, tn.CEILING_TOP, width, tn.CEILING_HEIGHT)
+
+        if not end_flag:
+            if jump_buffer_remaining > 0:
+                if attempt_flap():
+                    jump_buffer_remaining = 0.0
+                elif attempt_double_jump_only():
+                    jump_buffer_remaining = 0.0
+                else:
+                    jump_buffer_remaining = max(0.0, jump_buffer_remaining - dt)
+
+        if not end_flag:
+            keys = pygame.key.get_pressed()
+            if keys[pygame.K_SPACE] and nitro_fuel > 0:
+                nitro_fuel -= tn.NITRO_DRAIN_PER_FRAME
+                nitro_fuel = max(0.0, nitro_fuel)
+                speed_y += tn.NITRO_LIFT_PER_FRAME
 
         if not end_flag:
             speed_y += gravity
             rect.y += int(round(speed_y))
-            rect.y = max(-30, min(rect.y, height - ground_h - rect.height))
+            rect.y = max(tn.BIRD_Y_CLAMP_TOP, min(rect.y, height - ground_h - rect.height))
 
-            hit_ceiling = rect.colliderect(ce_rect)
-            hit_floor = rect.bottom >= height - ground_h
+            bh = bird_hit_rect()
+            hit_ceiling = bh.colliderect(ce_rect)
+            hit_floor = bh.bottom >= height - ground_h
+
+            shield_buff = shield_until_gt >= 0 and game_time < shield_until_gt
+            if shield_until_gt >= 0 and game_time >= shield_until_gt:
+                shield_until_gt = -1.0
 
             for i in range(wall_counter):
-                list_wall[i].x -= int(pipe_speed)
-                list_wall2[i].x -= int(pipe_speed)
+                list_wall[i].x -= pipe_dx
+                list_wall2[i].x -= pipe_dx
 
                 if list_wall[i].right < rect.centerx and not pipe_passed[i]:
                     pipe_passed[i] = True
                     points += 1
+
+                orb = aura_orbs[i]
+                ox_c = list_wall[i].centerx
+                oy_c = (list_wall2[i].bottom + list_wall[i].top) // 2
+                if (
+                    not orb["collected"]
+                    and game_time < orb["expire_at"]
+                    and list_wall[i].right > -pipe_w
+                ):
+                    bird_r = max(bh.width, bh.height) * 0.55
+                    dx = bh.centerx - ox_c
+                    dy = bh.centery - oy_c
+                    if dx * dx + dy * dy <= (tn.AURA_ORB_RADIUS + bird_r) ** 2:
+                        orb["collected"] = True
+                        shield_until_gt = game_time + tn.AURA_SHIELD_SEC
 
                 if list_wall[i].right < -pipe_w:
                     pipe_passed[i] = False
                     gap_rng_live = gap_hard if difficulty[-1] == 1 else gap_easy
                     mx = max(list_wall[j].right for j in range(wall_counter))
                     mx = max(mx, width)
-                    new_x = mx + random.randint(spacing - 40, spacing + 120)
+                    lo, hi = tn.PIPE_RESPAWN_SPACING_EXTRA
+                    new_x = mx + spacing + random.randint(lo, hi)
                     full_gap = random.randint(gap_rng_live[0], gap_rng_live[1])
                     gap_half = full_gap // 2
+                    vm = tn.PIPE_GAP_VERTICAL_MARGIN
                     cy = random.randint(
-                        180 + gap_half,
-                        height - ground_h - 180 - gap_half,
+                        vm + gap_half,
+                        height - ground_h - vm - gap_half,
                     )
                     top_h = cy - gap_half
                     bot_top = cy + gap_half
                     bot_h = height - ground_h - bot_top
                     list_wall2[i] = pygame.Rect(new_x, 0, pipe_w, top_h)
                     list_wall[i] = pygame.Rect(new_x, bot_top, pipe_w, bot_h)
+                    aura_orbs[i] = {
+                        "expire_at": game_time + tn.AURA_ORB_HANG_SEC,
+                        "collected": False,
+                    }
 
-                if rect.colliderect(list_wall[i]) or rect.colliderect(list_wall2[i]):
-                    end_flag = True
-                    shake = 14.0
+                ph_top = pipe_hit_rect(list_wall2[i])
+                ph_bot = pipe_hit_rect(list_wall[i])
+                pipe_hit = bh.colliderect(ph_top) or bh.colliderect(ph_bot)
+                if pipe_hit:
+                    invuln_now = invuln_until_gt >= 0 and game_time < invuln_until_gt
+                    if invuln_now:
+                        pass
+                    elif shield_buff:
+                        invuln_until_gt = game_time + tn.AURA_PIPE_INVINCIBLE_SEC
+                    else:
+                        end_flag = True
+                        shake = tn.SHAKE_ON_DEATH
 
             if hit_ceiling or hit_floor:
                 end_flag = True
-                shake = 14.0
+                shake = tn.SHAKE_ON_DEATH
 
-            scroll_accum += pipe_speed
+            scroll_accum += scroll_step
 
         else:
-            shake *= 0.88
-            death_angle = min(75, death_angle + 400 * dt)
-            speed_y += gravity * 0.6
+            shake *= tn.SHAKE_DECAY
+            death_angle = min(tn.DEATH_TILT_MAX, death_angle + tn.DEATH_TILT_SPEED * dt)
+            speed_y += gravity * tn.DEATH_GRAVITY_MULT
             rect.y += int(round(speed_y))
             rect.y = min(rect.y, height - ground_h - rect.height)
 
@@ -433,8 +676,14 @@ def start_the_game():
         for i in range(wall_counter):
             draw_pipe(world, list_wall2[i], flip=False)
             draw_pipe(world, list_wall[i], flip=True)
+            orb = aura_orbs[i]
+            if not orb["collected"] and game_time < orb["expire_at"]:
+                ocx = list_wall[i].centerx
+                ocy = (list_wall2[i].bottom + list_wall[i].top) // 2
+                if list_wall[i].right > -tn.AURA_ORB_RADIUS and list_wall[i].left < width + tn.AURA_ORB_RADIUS:
+                    draw_gap_aura_orb(world, ocx, ocy, tn.AURA_ORB_RADIUS, game_time + i * 0.7)
 
-        draw_ground(world, scroll_accum, game_time)
+        draw_ground(world, scroll_accum, game_time, ground_h)
 
         frame_index = (frame_index + anim_speed * dt * 60) % (len(Player_Sprite) * 10)
         image = Player_Sprite[int(frame_index / 10)]
@@ -446,6 +695,10 @@ def start_the_game():
         br = bird_draw.get_rect(center=rect.center)
 
         world.blit(bird_draw, br)
+        inv_draw = invuln_until_gt >= 0 and game_time < invuln_until_gt
+        sh_draw = shield_until_gt >= 0 and game_time < shield_until_gt
+        if inv_draw or sh_draw:
+            draw_shield_overlay(world, br, blink_on=inv_draw, t=game_time)
 
         screen.fill((12, 18, 28))
         screen.blit(world, (ox, oy))
@@ -464,10 +717,20 @@ def start_the_game():
         screen.blit(score_shadow, (sx + 3, sy + 3))
         screen.blit(score_text, (sx, sy))
 
-        small_hint = pygame.font.SysFont(sysfont_name, 22).render(
-            "SPACE — взмах", True, (255, 255, 255)
+        nf = pygame.font.SysFont(sysfont_name, 20)
+        line1 = nf.render(
+            "SPACE — взмах / удержание — нитро", True, (248, 250, 255)
         )
-        screen.blit(small_hint, (28 + ox, sy + 52))
+        line2 = nf.render(
+            "Сфера в щели → щит: удар по трубе = 1 с неуязвимости",
+            True, (200, 230, 255),
+        )
+        screen.blit(line1, (28 + ox, sy + 50))
+        screen.blit(line2, (28 + ox, sy + 72))
+        nitro_frac = nitro_fuel / max(1e-6, tn.NITRO_MAX_UNITS)
+        draw_nitro_bar(screen, 28 + ox, height - 42 + oy, 200, 14, nitro_frac)
+        lb = pygame.font.SysFont(sysfont_name, 16).render("НИТРО", True, (180, 200, 220))
+        screen.blit(lb, (28 + ox, height - 59 + oy))
 
         if end_flag:
             if not saved_results:
