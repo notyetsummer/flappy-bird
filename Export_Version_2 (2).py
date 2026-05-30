@@ -432,6 +432,15 @@ def spawn_pipe_pair(
     return top_rect, bot_rect
 
 
+def start_platformer():
+    import platformer
+
+    platformer.run_platformer_session(
+        restore_size=size,
+        restore_caption="Flappy Bird — улучшенная версия",
+    )
+
+
 def start_the_game():
     tn = TUNING
     enable_nitro = opt_enable_nitro[0]
@@ -821,7 +830,8 @@ menu.add.selector(
     [("Вкл.", True), ("Выкл.", False)],
     onchange=set_opt_double_jump,
 )
-menu.add.button("Играть", start_the_game)
+menu.add.button("Flappy Bird", start_the_game)
+menu.add.button("Platformer", start_platformer)
 menu.add.button("Выход", pygame_menu.events.EXIT)
 menu.add.button("——————————————————")
 menu.add.button("Таблица:")
