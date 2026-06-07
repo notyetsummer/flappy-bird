@@ -39,6 +39,13 @@ GATE_CLOSED = (200, 170, 60)
 GATE_FRAME = (120, 100, 30)
 BUTTON_UP = (200, 60, 60)
 BUTTON_DOWN = (80, 200, 100)
+GRAV_ACCENT = (255, 150, 60)
+POWERUP = (80, 220, 255)
+POWERUP_CORE = (220, 250, 255)
+SAW = (210, 210, 220)
+SAW_CORE = (90, 95, 110)
+TURRET = (90, 100, 120)
+PROJECTILE = (255, 90, 60)
 
 
 class GameState(Enum):
@@ -136,16 +143,77 @@ class Gate:
 
 
 @dataclass
+class PowerUp:
+    """Бонус. kind='lowgrav' — на duration секунд уменьшает гравитацию вдвое."""
+
+    x: float
+    y: float
+    kind: str = "lowgrav"
+    duration: float = 30.0
+    radius: float = 14.0
+    collected: bool = False
+
+    @property
+    def rect(self) -> pygame.Rect:
+        r = int(self.radius)
+        return pygame.Rect(int(self.x - r), int(self.y - r), r * 2, r * 2)
+
+
+@dataclass
+class Saw:
+    """Вращающаяся пила, курсирующая между (x1,y1) и (x2,y2) по синусоиде."""
+
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+    r: float = 26.0
+    period: float = 2.4
+    phase: float = 0.0
+
+    def pos(self, t: float) -> tuple[float, float]:
+        k = (math.sin(2 * math.pi * (t / self.period) + self.phase) + 1) / 2
+        return (self.x1 + (self.x2 - self.x1) * k, self.y1 + (self.y2 - self.y1) * k)
+
+
+@dataclass
+class Turret:
+    """Турель: периодически выпускает шип-снаряд в направлении (dx, dy)."""
+
+    x: float
+    y: float
+    dx: float
+    dy: float
+    interval: float = 1.4
+    speed: float = 4.2
+    phase: float = 0.0
+    timer: float = 0.0
+
+
+@dataclass
+class Projectile:
+    x: float
+    y: float
+    vx: float
+    vy: float
+    r: float = 7.0
+
+
+@dataclass
 class LevelData:
     name: str
     world_w: int
     spawn: tuple[float, float]
     platforms: list[RectObj] = field(default_factory=list)
     spikes: list[RectObj] = field(default_factory=list)
+    spikes_down: list[RectObj] = field(default_factory=list)
     coins: list[CoinObj] = field(default_factory=list)
     portals: list[Portal] = field(default_factory=list)
     buttons: list[Button] = field(default_factory=list)
     gates: list[Gate] = field(default_factory=list)
+    powerups: list[PowerUp] = field(default_factory=list)
+    saws: list[Saw] = field(default_factory=list)
+    turrets: list[Turret] = field(default_factory=list)
     goal: RectObj | None = None
     bg_top: tuple[int, int, int] = SKY
     bg_bottom: tuple[int, int, int] = GROUND
@@ -386,7 +454,140 @@ def level_3() -> LevelData:
     )
 
 
-LEVELS: list[Callable[[], LevelData]] = [level_1, level_2, level_3]
+def level_4() -> LevelData:
+    """Уровень 4 (гравитация): коридор «пол ↔ потолок». Нажми G (или Shift),
+    стоя на поверхности, чтобы перевернуть гравитацию и ходить по потолку.
+    Шипы чередуются на полу и потолке — без переворотов не пройти."""
+    p: list[RectObj] = []
+    s_up: list[RectObj] = []  # шипы на полу (остриём вверх)
+    s_dn: list[RectObj] = []  # шипы на потолке (остриём вниз)
+    c: list[CoinObj] = []
+
+    world_w = 1900
+    floor_top = H - 40
+    ceil_h = 30  # нижняя кромка потолка = ceil_h
+    ph_ = Feel.PLAYER_H
+
+    # пол и потолок на всю длину
+    p.append(RectObj(0, floor_top, world_w, 40))
+    p.append(RectObj(0, 0, world_w, ceil_h))
+
+    # шипы на полу (на этих участках надо идти по потолку)
+    floor_spikes = [(280, 240), (920, 240), (1500, 240)]
+    s_up.extend(RectObj(x, floor_top - 18, w, 18) for x, w in floor_spikes)
+
+    # шипы на потолке (на этих участках надо идти по полу)
+    ceil_spikes = [(600, 260), (1180, 260)]
+    s_dn.extend(RectObj(x, ceil_h, w, 18) for x, w in ceil_spikes)
+
+    # монеты у потолка (берутся только в перевёрнутой гравитации)
+    ceil_coins = [(380, ceil_h + 40), (440, ceil_h + 40),
+                  (1000, ceil_h + 40), (1060, ceil_h + 40),
+                  (1600, ceil_h + 40)]
+    # монеты у пола (берутся в обычной гравитации, под шипами потолка)
+    floor_coins = [(700, floor_top - 40), (760, floor_top - 40),
+                   (1280, floor_top - 40), (1340, floor_top - 40)]
+    c.extend(CoinObj(x, y) for x, y in ceil_coins + floor_coins)
+
+    goal = RectObj(world_w - 110, floor_top - 70, 40, 70)
+    return LevelData(
+        name="Перевёртыш",
+        world_w=world_w,
+        spawn=(40.0, float(floor_top - ph_)),
+        platforms=p,
+        spikes=s_up,
+        spikes_down=s_dn,
+        coins=c,
+        goal=goal,
+        bg_top=(40, 30, 60),
+        bg_bottom=(90, 50, 40),
+        plat_color=(70, 55, 80),
+        plat_top_color=(150, 100, 70),
+    )
+
+
+def level_5() -> LevelData:
+    """Уровень 5 (паверап): возьми синий бонус «низкая гравитация» (×0.5 на 30 с)
+    и за это время пройди полосу препятствий — вращающиеся пилы и турели,
+    стреляющие шипами. Высокие/далёкие прыжки реальны только в низкой гравитации."""
+    p: list[RectObj] = []
+    s: list[RectObj] = []
+    c: list[CoinObj] = []
+    powerups: list[PowerUp] = []
+    saws: list[Saw] = []
+    turrets: list[Turret] = []
+
+    world_w = 2300
+    ph_ = Feel.PLAYER_H
+
+    # стартовая площадка с бонусом
+    p.append(RectObj(0, H - 40, 360, 40))
+    powerups.append(PowerUp(250, H - 80, kind="lowgrav", duration=30.0))
+
+    # цепочка платформ с широкими провалами (между ними — пропасть = смерть)
+    steps = [
+        (470, H - 120, 120, 18),
+        (700, H - 175, 120, 18),
+        (940, H - 130, 120, 18),
+        (1180, H - 205, 120, 18),
+        (1430, H - 150, 120, 18),
+        (1670, H - 120, 120, 18),
+        (1910, H - 185, 120, 18),
+    ]
+    p.extend(RectObj(*t) for t in steps)
+    # финишная площадка
+    p.append(RectObj(2080, H - 70, 220, 70))
+
+    # шипы на некоторых площадках — приземляйся точно
+    s.append(RectObj(700, H - 193, 30, 18))   # край P2
+    s.append(RectObj(1520, H - 168, 30, 18))  # край P5
+
+    # вращающиеся пилы в провалах и над платформами
+    saws.append(Saw(600, H - 90, 600, H - 240, r=26, period=2.0, phase=0.0))      # верт. в 1-м провале
+    saws.append(Saw(880, H - 150, 1060, H - 150, r=24, period=2.6, phase=1.0))    # гориз. над P3
+    saws.append(Saw(1300, H - 90, 1300, H - 260, r=28, period=2.2, phase=0.5))    # верт. между P4-P5
+    saws.append(Saw(1600, H - 150, 1780, H - 150, r=24, period=2.8, phase=2.0))   # гориз. над P6
+    saws.append(Saw(2000, H - 110, 2000, H - 300, r=26, period=2.0, phase=1.5))   # верт. перед финишем
+
+    # турели: стреляют шипами поперёк траекторий прыжков
+    turrets.append(Turret(430, H - 250, dx=1, dy=0, interval=1.3, speed=4.5))
+    turrets.append(Turret(1180, H - 330, dx=0, dy=1, interval=1.1, speed=4.8, phase=0.4))
+    turrets.append(Turret(2050, H - 250, dx=-1, dy=0, interval=1.2, speed=5.0, phase=0.8))
+
+    # монеты-награды на высоте (берутся только во «флоут»-прыжках)
+    coins_pos = [
+        (530, H - 230),
+        (760, H - 290),
+        (1000, H - 250),
+        (1240, H - 320),
+        (1490, H - 270),
+        (1730, H - 240),
+        (1970, H - 300),
+    ]
+    c.extend(CoinObj(x, y) for x, y in coins_pos)
+
+    goal = RectObj(2230, H - 140, 40, 70)
+    return LevelData(
+        name="Полоса препятствий",
+        world_w=world_w,
+        spawn=(40.0, float(H - 40 - ph_)),
+        platforms=p,
+        spikes=s,
+        coins=c,
+        powerups=powerups,
+        saws=saws,
+        turrets=turrets,
+        goal=goal,
+        bg_top=(30, 40, 55),
+        bg_bottom=(60, 70, 90),
+        plat_color=(60, 70, 90),
+        plat_top_color=(120, 140, 165),
+    )
+
+
+LEVELS: list[Callable[[], LevelData]] = [
+    level_1, level_2, level_3, level_4, level_5,
+]
 
 
 class Player:
@@ -405,6 +606,9 @@ class Player:
         self.dead = False
         self.was_on_ground = False
         self.portal_cooldown = 0.0
+        self.gravity_dir = 1  # 1 = вниз (обычно), -1 = вверх (ходьба по потолку)
+        self.flip_held = False
+        self.low_grav_timer = 0.0  # >0 — гравитация уменьшена вдвое
 
     @property
     def rect(self) -> pygame.Rect:
@@ -427,6 +631,13 @@ class Camera:
 
     def apply(self, r: pygame.Rect) -> pygame.Rect:
         return pygame.Rect(r.x - int(self.x), r.y, r.w, r.h)
+
+
+def circle_rect_hit(cx: float, cy: float, r: float, rect: pygame.Rect) -> bool:
+    """Пересечение круга (cx, cy, r) с прямоугольником."""
+    nx = max(rect.left, min(cx, rect.right))
+    ny = max(rect.top, min(cy, rect.bottom))
+    return (cx - nx) ** 2 + (cy - ny) ** 2 <= r * r
 
 
 class PlatformerGame:
@@ -452,6 +663,8 @@ class PlatformerGame:
         self.coins_collected = 0
         self.complete_timer = 0.0
         self.death_timer = 0.0
+        self.level_time = 0.0
+        self.projectiles: list[Projectile] = []
 
     def load_level(self, index: int) -> None:
         self.level_index = index
@@ -465,6 +678,8 @@ class PlatformerGame:
         self.state = GameState.PLAYING
         self.complete_timer = 0.0
         self.death_timer = 0.0
+        self.level_time = 0.0
+        self.projectiles = []
 
     def run(self, *, quit_pygame_on_exit: bool = True) -> None:
         while True:
@@ -530,6 +745,8 @@ class PlatformerGame:
         p = self.player
         keys = pygame.key.get_pressed()
         p.portal_cooldown = max(0.0, p.portal_cooldown - dt)
+        p.low_grav_timer = max(0.0, p.low_grav_timer - dt)
+        self.level_time += dt
 
         # --- горизонтальное движение (стрелки и WASD дублируют друг друга) ---
         left = keys[pygame.K_LEFT] or keys[pygame.K_a]
@@ -547,12 +764,24 @@ class PlatformerGame:
 
         p.vx = max(-Feel.MOVE_SPEED, min(Feel.MOVE_SPEED, p.vx))
 
-        # --- прыжок: буфер, coyote time, variable height ---
+        # --- переворот гравитации: G / Shift, стоя на поверхности ---
+        g = p.gravity_dir
+        flip_pressed = keys[pygame.K_g] or keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
+        if flip_pressed and not p.flip_held and p.on_ground:
+            p.gravity_dir = -g
+            g = p.gravity_dir
+            p.vy = 0.0
+            p.on_ground = False
+            p.coyote_timer = 0.0
+        p.flip_held = flip_pressed
+
+        # --- прыжок: буфер, coyote time, variable height (с учётом направления g) ---
         jump_pressed = keys[pygame.K_SPACE] or keys[pygame.K_w] or keys[pygame.K_UP]
+        rising = p.vy * g < 0  # движется против гравитации = взлетает
         if jump_pressed:
             p.jump_buffer_timer = Feel.JUMP_BUFFER
         else:
-            if p.jump_held and p.vy < 0:
+            if p.jump_held and rising:
                 p.vy *= Feel.JUMP_CUT_MULT
             p.jump_held = False
 
@@ -564,7 +793,7 @@ class PlatformerGame:
 
         can_jump = p.coyote_timer > 0
         if p.jump_buffer_timer > 0 and can_jump:
-            p.vy = Feel.JUMP_VELOCITY
+            p.vy = Feel.JUMP_VELOCITY * g  # импульс против гравитации
             p.jump_buffer_timer = 0.0
             p.coyote_timer = 0.0
             p.on_ground = False
@@ -573,19 +802,21 @@ class PlatformerGame:
         if jump_pressed:
             p.jump_held = True
 
-        # --- гравитация ---
+        # --- гравитация (по текущему направлению; паверап уменьшает вдвое) ---
         grav = Feel.GRAVITY
-        if p.vy > 0:
+        if p.low_grav_timer > 0:
+            grav *= 0.5
+        if p.vy * g > 0:  # падение по направлению гравитации — усиливаем дугу
             grav *= Feel.FALL_GRAVITY_MULT
-        p.vy += grav
-        p.vy = min(p.vy, Feel.MAX_FALL)
+        p.vy += grav * g
+        p.vy = max(-Feel.MAX_FALL, min(Feel.MAX_FALL, p.vy))
 
         # --- интеграция + коллизии ---
         self.move_axis(p, p.vx, "x")
         self.move_axis(p, p.vy, "y")
 
-        # падение в бездну
-        if p.y > H + 80:
+        # падение в бездну (в любую сторону при перевёрнутой гравитации)
+        if p.y > H + 80 or p.y + p.h < -80:
             self.kill_player()
 
         self.camera.update(p.x + p.w / 2)
@@ -629,9 +860,45 @@ class PlatformerGame:
                     )
                     break
 
-        # шипы
-        for spike in self.level.spikes:
+        # паверапы (низкая гравитация)
+        for pu in self.level.powerups:
+            if pu.collected:
+                continue
+            if pr.colliderect(pu.rect):
+                pu.collected = True
+                if pu.kind == "lowgrav":
+                    p.low_grav_timer = pu.duration
+
+        # турели: накапливают таймер и выпускают шип-снаряды
+        for tu in self.level.turrets:
+            tu.timer += dt
+            if tu.timer >= tu.interval:
+                tu.timer -= tu.interval
+                self.projectiles.append(
+                    Projectile(tu.x, tu.y, tu.dx * tu.speed, tu.dy * tu.speed)
+                )
+
+        # движение снарядов (px/кадр) + отсев за пределами мира
+        alive: list[Projectile] = []
+        for pj in self.projectiles:
+            pj.x += pj.vx
+            pj.y += pj.vy
+            if -40 <= pj.x <= self.level.world_w + 40 and -80 <= pj.y <= H + 80:
+                alive.append(pj)
+        self.projectiles = alive
+
+        # смертельные коллизии: шипы, пилы, снаряды
+        for spike in (*self.level.spikes, *self.level.spikes_down):
             if pr.colliderect(spike.rect):
+                self.kill_player()
+                return
+        for saw in self.level.saws:
+            cx, cy = saw.pos(self.level_time)
+            if circle_rect_hit(cx, cy, saw.r * 0.82, pr):
+                self.kill_player()
+                return
+        for pj in self.projectiles:
+            if circle_rect_hit(pj.x, pj.y, pj.r, pr):
                 self.kill_player()
                 return
 
@@ -665,13 +932,16 @@ class PlatformerGame:
                     p.x = pl.right
                 pr = p.rect
             else:
-                if velocity > 0:
+                if velocity > 0:  # движение вниз по экрану → упор в верх платформы
                     p.y = pl.top - p.h
                     p.vy = 0
-                    p.on_ground = True
-                elif velocity < 0:
+                    if p.gravity_dir > 0:
+                        p.on_ground = True
+                elif velocity < 0:  # движение вверх → упор в низ платформы (потолок)
                     p.y = pl.bottom
                     p.vy = 0
+                    if p.gravity_dir < 0:
+                        p.on_ground = True
                 pr = p.rect
 
         # границы мира
@@ -711,12 +981,19 @@ class PlatformerGame:
             top = pygame.Rect(r.x, r.y, r.w, 4)
             pygame.draw.rect(self.screen, self.level.plat_top_color, top)
 
-        # шипы (треугольники)
+        # шипы (треугольники остриём вверх — на полу)
         for spike in self.level.spikes:
             r = self.camera.apply(spike.rect)
             if r.right < 0 or r.left > W:
                 continue
             self.draw_spikes(r)
+
+        # шипы остриём вниз — на потолке
+        for spike in self.level.spikes_down:
+            r = self.camera.apply(spike.rect)
+            if r.right < 0 or r.left > W:
+                continue
+            self.draw_spikes(r, down=True)
 
         # ворота
         for gate in self.level.gates:
@@ -769,6 +1046,61 @@ class PlatformerGame:
                 self.screen, COIN_SHINE, (sx - 3, int(sy + bob - 3)), 4
             )
 
+        # паверапы (низкая гравитация): пульсирующий орб со стрелкой вниз
+        for pu in self.level.powerups:
+            if pu.collected:
+                continue
+            sx = int(pu.x - cam_x)
+            sy = int(pu.y)
+            if sx < -30 or sx > W + 30:
+                continue
+            pr_ = int(2 * (1 + math.sin(pt)))
+            pygame.draw.circle(self.screen, POWERUP, (sx, sy), int(pu.radius) + pr_)
+            pygame.draw.circle(self.screen, POWERUP_CORE, (sx, sy), int(pu.radius) - 5)
+            pygame.draw.polygon(
+                self.screen, POWERUP,
+                [(sx - 6, sy - 3), (sx + 6, sy - 3), (sx, sy + 6)],
+            )
+
+        # турели (тумбы со стволом по направлению огня)
+        for tu in self.level.turrets:
+            bx = int(tu.x - cam_x)
+            by = int(tu.y)
+            if bx < -30 or bx > W + 30:
+                continue
+            pygame.draw.rect(self.screen, TURRET, (bx - 12, by - 12, 24, 24), border_radius=4)
+            pygame.draw.rect(
+                self.screen, (50, 55, 70),
+                (bx + int(tu.dx * 10) - 5, by + int(tu.dy * 10) - 5, 12, 12),
+                border_radius=2,
+            )
+
+        # снаряды-шипы
+        for pj in self.projectiles:
+            sx = int(pj.x - cam_x)
+            sy = int(pj.y)
+            if sx < -20 or sx > W + 20:
+                continue
+            pygame.draw.circle(self.screen, PROJECTILE, (sx, sy), int(pj.r))
+            pygame.draw.circle(self.screen, (120, 30, 20), (sx, sy), int(pj.r), 2)
+
+        # вращающиеся пилы
+        for saw in self.level.saws:
+            cx, cy = saw.pos(self.level_time)
+            sx = int(cx - cam_x)
+            sy = int(cy)
+            if sx < -40 or sx > W + 40:
+                continue
+            r = int(saw.r)
+            ang = self.level_time * 9.0  # скорость вращения зубьев
+            pygame.draw.circle(self.screen, SAW, (sx, sy), r)
+            for i in range(12):
+                a = ang + i * (2 * math.pi / 12)
+                tx = sx + int(math.cos(a) * (r + 6))
+                ty = sy + int(math.sin(a) * (r + 6))
+                pygame.draw.line(self.screen, SAW, (sx, sy), (tx, ty), 3)
+            pygame.draw.circle(self.screen, SAW_CORE, (sx, sy), max(3, r // 3))
+
         # цель
         if self.level.goal:
             gr = self.camera.apply(self.level.goal.rect)
@@ -777,13 +1109,18 @@ class PlatformerGame:
             label = self.font_small.render("EXIT", True, (20, 60, 30))
             self.screen.blit(label, (gr.centerx - label.get_width() // 2, gr.y - 22))
 
-        # игрок
+        # игрок (акцент/глаз ориентированы по направлению гравитации)
+        gdir = self.player.gravity_dir
         pr = self.camera.apply(self.player.rect)
-        pygame.draw.rect(self.screen, PLAYER_ACCENT, pr.move(0, 4))
+        if self.player.low_grav_timer > 0:
+            aura = pr.inflate(14, 14)
+            pygame.draw.ellipse(self.screen, POWERUP, aura, 2)
+        pygame.draw.rect(self.screen, PLAYER_ACCENT, pr.move(0, 4 * gdir))
         body = pr.inflate(-4, -8)
         pygame.draw.rect(self.screen, PLAYER, body, border_radius=6)
         eye_x = body.right - 8 if self.player.facing > 0 else body.left + 4
-        pygame.draw.circle(self.screen, UI, (eye_x, body.y + 10), 4)
+        eye_y = body.y + 10 if gdir > 0 else body.bottom - 10
+        pygame.draw.circle(self.screen, UI, (eye_x, eye_y), 4)
 
         # HUD
         self.draw_hud()
@@ -805,12 +1142,36 @@ class PlatformerGame:
             UI,
         )
         self.screen.blit(title, (12, 10))
-        hints = self.font_small.render(
-            "← → / A D — бег   Space / W / ↑ — прыжок   Esc — список уровней",
-            True,
-            UI_DIM,
-        )
+        has_gravity = bool(self.level.spikes_down) or self.player.gravity_dir < 0
+        base_hint = "← → / A D — бег   Space / W / ↑ — прыжок   Esc — список уровней"
+        if has_gravity:
+            base_hint = (
+                "← → / A D — бег   Space / W — прыжок   G / Shift — гравитация   Esc — меню"
+            )
+        hints = self.font_small.render(base_hint, True, UI_DIM)
         self.screen.blit(hints, (12, H - 28))
+
+        # индикатор направления гравитации
+        if has_gravity:
+            up = self.player.gravity_dir < 0
+            arrow = "Гравитация: ↑ ПОТОЛОК" if up else "Гравитация: ↓ ПОЛ"
+            ind = self.font_small.render(arrow, True, GRAV_ACCENT)
+            self.screen.blit(ind, (W - ind.get_width() - 12, 12))
+
+        # таймер низкой гравитации (паверап)
+        if self.player.low_grav_timer > 0:
+            secs = self.player.low_grav_timer
+            label = self.font.render(
+                f"Низкая гравитация: {secs:0.1f}s", True, POWERUP_CORE
+            )
+            bx, by = 12, 40
+            self.screen.blit(label, (bx, by))
+            frac = max(0.0, min(1.0, secs / 30.0))
+            bar_w = 220
+            pygame.draw.rect(self.screen, (30, 40, 55), (bx, by + 28, bar_w, 10), border_radius=4)
+            pygame.draw.rect(
+                self.screen, POWERUP, (bx, by + 28, int(bar_w * frac), 10), border_radius=4
+            )
 
         # подсказка при нахождении рядом с кнопкой
         if self.near_button:
@@ -857,12 +1218,15 @@ class PlatformerGame:
             self.screen.blit(surf, (W // 2 - surf.get_width() // 2, hy))
             hy += 26
 
-    def draw_spikes(self, r: pygame.Rect) -> None:
+    def draw_spikes(self, r: pygame.Rect, down: bool = False) -> None:
         n = max(1, r.w // 14)
         w = r.w / n
         for i in range(n):
             x0 = r.x + i * w
-            pts = [(x0, r.bottom), (x0 + w / 2, r.top), (x0 + w, r.bottom)]
+            if down:  # остриём вниз (на потолке)
+                pts = [(x0, r.top), (x0 + w / 2, r.bottom), (x0 + w, r.top)]
+            else:  # остриём вверх (на полу)
+                pts = [(x0, r.bottom), (x0 + w / 2, r.top), (x0 + w, r.bottom)]
             pygame.draw.polygon(self.screen, SPIKE, pts)
 
     def draw_overlay(self, title: str, sub: str, hint: str) -> None:
