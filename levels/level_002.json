@@ -1,0 +1,239 @@
+{
+  "version": 1,
+  "name": "level_002",
+  "tile_size": 48,
+  "width_tiles": 14,
+  "height_tiles": 24,
+  "background": "default",
+  "player": {
+    "start_x": 48,
+    "start_y": 56,
+    "asset_set": "default_player"
+  },
+  "level_end": {
+    "x": 576,
+    "y": 1034,
+    "type": "flag"
+  },
+  "tiles": [
+    {
+      "x": 0,
+      "y": 2,
+      "tile_id": "grass"
+    },
+    {
+      "x": 1,
+      "y": 2,
+      "tile_id": "grass"
+    },
+    {
+      "x": 2,
+      "y": 2,
+      "tile_id": "grass"
+    },
+    {
+      "x": 3,
+      "y": 2,
+      "tile_id": "grass"
+    },
+    {
+      "x": 0,
+      "y": 23,
+      "tile_id": "grass"
+    },
+    {
+      "x": 1,
+      "y": 23,
+      "tile_id": "grass"
+    },
+    {
+      "x": 2,
+      "y": 23,
+      "tile_id": "grass"
+    },
+    {
+      "x": 3,
+      "y": 23,
+      "tile_id": "grass"
+    },
+    {
+      "x": 4,
+      "y": 23,
+      "tile_id": "grass"
+    },
+    {
+      "x": 5,
+      "y": 23,
+      "tile_id": "grass"
+    },
+    {
+      "x": 6,
+      "y": 23,
+      "tile_id": "grass"
+    },
+    {
+      "x": 7,
+      "y": 23,
+      "tile_id": "grass"
+    },
+    {
+      "x": 8,
+      "y": 23,
+      "tile_id": "grass"
+    },
+    {
+      "x": 9,
+      "y": 23,
+      "tile_id": "grass"
+    },
+    {
+      "x": 10,
+      "y": 23,
+      "tile_id": "grass"
+    },
+    {
+      "x": 11,
+      "y": 23,
+      "tile_id": "grass"
+    },
+    {
+      "x": 12,
+      "y": 23,
+      "tile_id": "grass"
+    },
+    {
+      "x": 13,
+      "y": 23,
+      "tile_id": "grass"
+    }
+  ],
+  "platforms": [
+    {
+      "x": 330,
+      "y": 260,
+      "width": 150,
+      "height": 24,
+      "tile_id": "stone"
+    },
+    {
+      "x": 70,
+      "y": 430,
+      "width": 150,
+      "height": 24,
+      "tile_id": "stone"
+    },
+    {
+      "x": 380,
+      "y": 600,
+      "width": 150,
+      "height": 24,
+      "tile_id": "stone"
+    },
+    {
+      "x": 110,
+      "y": 780,
+      "width": 170,
+      "height": 24,
+      "tile_id": "stone"
+    },
+    {
+      "x": 420,
+      "y": 950,
+      "width": 160,
+      "height": 24,
+      "tile_id": "stone"
+    }
+  ],
+  "enemies": [],
+  "items": [
+    {
+      "x": 110,
+      "y": 90,
+      "item_type": "coin",
+      "asset_id": "coin"
+    },
+    {
+      "x": 405,
+      "y": 235,
+      "item_type": "coin",
+      "asset_id": "coin"
+    },
+    {
+      "x": 150,
+      "y": 405,
+      "item_type": "coin",
+      "asset_id": "coin"
+    },
+    {
+      "x": 455,
+      "y": 575,
+      "item_type": "coin",
+      "asset_id": "coin"
+    },
+    {
+      "x": 190,
+      "y": 755,
+      "item_type": "coin",
+      "asset_id": "coin"
+    },
+    {
+      "x": 495,
+      "y": 925,
+      "item_type": "coin",
+      "asset_id": "coin"
+    },
+    {
+      "x": 650,
+      "y": 1060,
+      "item_type": "gem",
+      "asset_id": "gem"
+    }
+  ],
+  "obstacles": [
+    {
+      "x": 240,
+      "y": 1086,
+      "width": 48,
+      "height": 18,
+      "obstacle_type": "spikes",
+      "asset_id": "spikes"
+    },
+    {
+      "x": 288,
+      "y": 1086,
+      "width": 48,
+      "height": 18,
+      "obstacle_type": "spikes",
+      "asset_id": "spikes"
+    },
+    {
+      "x": 336,
+      "y": 1086,
+      "width": 48,
+      "height": 18,
+      "obstacle_type": "spikes",
+      "asset_id": "spikes"
+    }
+  ],
+  "saws": [
+    {
+      "x1": 230,
+      "y1": 520,
+      "x2": 470,
+      "y2": 520,
+      "r": 26,
+      "period": 2.4,
+      "phase": 0.0
+    },
+    {
+      "x1": 300,
+      "y1": 650,
+      "x2": 300,
+      "y2": 880,
+      "r": 24,
+      "period": 2.0,
+      "phase": 3.14159
+    }
+  ],
+  "decorations": []
+}

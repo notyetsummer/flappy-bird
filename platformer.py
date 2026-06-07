@@ -234,6 +234,7 @@ class LevelData:
     name: str
     world_w: int
     spawn: tuple[float, float]
+    world_h: int = H
     platforms: list[RectObj] = field(default_factory=list)
     spikes: list[RectObj] = field(default_factory=list)
     spikes_down: list[RectObj] = field(default_factory=list)
@@ -656,18 +657,34 @@ class Player:
 
 
 class Camera:
-    def __init__(self, world_w: int) -> None:
+    def __init__(self, world_w: int, world_h: int = H) -> None:
         self.world_w = world_w
+        self.world_h = world_h
         self.x = 0.0
+        self.y = 0.0
 
-    def update(self, target_x: float) -> None:
+    def _clamp_y(self, value: float) -> float:
+        # если уровень не выше экрана — вертикального скролла нет (как раньше)
+        if self.world_h <= H:
+            return 0.0
+        return max(0.0, min(value, float(self.world_h - H)))
+
+    def update(self, target_x: float, target_y: float | None = None) -> None:
         # мягкое следование: камера чуть впереди персонажа
         desired = target_x - W * 0.35
         desired = max(0.0, min(desired, float(self.world_w - W)))
         self.x += (desired - self.x) * 0.12
+        if target_y is not None:
+            desired_y = self._clamp_y(target_y - H * 0.5)
+            self.y += (desired_y - self.y) * 0.12
+
+    def snap(self, target_x: float, target_y: float | None = None) -> None:
+        self.x = max(0.0, min(target_x - W * 0.35, float(self.world_w - W)))
+        if target_y is not None:
+            self.y = self._clamp_y(target_y - H * 0.5)
 
     def apply(self, r: pygame.Rect) -> pygame.Rect:
-        return pygame.Rect(r.x - int(self.x), r.y, r.w, r.h)
+        return pygame.Rect(r.x - int(self.x), r.y - int(self.y), r.w, r.h)
 
 
 def circle_rect_hit(cx: float, cy: float, r: float, rect: pygame.Rect) -> bool:
@@ -675,6 +692,33 @@ def circle_rect_hit(cx: float, cy: float, r: float, rect: pygame.Rect) -> bool:
     nx = max(rect.left, min(cx, rect.right))
     ny = max(rect.top, min(cy, rect.bottom))
     return (cx - nx) ** 2 + (cy - ny) ** 2 <= r * r
+
+
+# --- scancode-группы для движения (физические клавиши, любая раскладка) ---
+SC_LEFT = (pygame.KSCAN_LEFT, pygame.KSCAN_A)
+SC_RIGHT = (pygame.KSCAN_RIGHT, pygame.KSCAN_D)
+SC_JUMP = (pygame.KSCAN_SPACE, pygame.KSCAN_W, pygame.KSCAN_UP)
+SC_FLIP = (pygame.KSCAN_G, pygame.KSCAN_LSHIFT, pygame.KSCAN_RSHIFT)
+SC_INTERACT = (pygame.KSCAN_F,)
+
+
+def evt_is(event: pygame.event.Event, scancodes: tuple[int, ...],
+           keycodes: tuple[int, ...] = ()) -> bool:
+    """Совпадение KEYDOWN-события по scancode (раскладко-независимо) или keycode."""
+    sc = getattr(event, "scancode", None)
+    if sc is not None and sc in scancodes:
+        return True
+    return event.key in keycodes
+
+
+def evt_number(event: pygame.event.Event) -> int | None:
+    """Цифра 1..9 из ряда (через scancode, иначе keycode). Возвращает индекс 0..8."""
+    sc = getattr(event, "scancode", None)
+    if sc is not None and pygame.KSCAN_1 <= sc <= pygame.KSCAN_9:
+        return sc - pygame.KSCAN_1
+    if pygame.K_1 <= event.key <= pygame.K_9:
+        return event.key - pygame.K_1
+    return None
 
 
 class PlatformerGame:
@@ -694,6 +738,9 @@ class PlatformerGame:
         self.completed: set[int] = set()
         self.near_button = False
         self.menu_items: list[dict] = []
+        # физически нажатые клавиши по scancode — не зависит от раскладки (RU/EN)
+        self.held_scancodes: set[int] = set()
+        self._menu_item_rects: list[pygame.Rect] = []
         self.level: LevelData | None = None
         self.player = Player(0, 0)
         self.camera = Camera(W)
@@ -716,6 +763,10 @@ class PlatformerGame:
     def _has_sprites(self) -> bool:
         return self.assets is not None and getattr(self.assets, "available", False)
 
+    def _held(self, *scancodes: int) -> bool:
+        """Зажата ли любая из физических клавиш (scancode). Раскладко-независимо."""
+        return any(s in self.held_scancodes for s in scancodes)
+
     def load_level(self, index: int) -> None:
         self.level_index = index
         self._start_level(LEVELS[index]())
@@ -729,7 +780,8 @@ class PlatformerGame:
     def _start_level(self, level: LevelData) -> None:
         self.level = level
         self.player.reset(*self.level.spawn)
-        self.camera = Camera(self.level.world_w)
+        self.camera = Camera(self.level.world_w, getattr(self.level, "world_h", H))
+        self.camera.snap(self.player.x + self.player.w / 2, self.player.y + self.player.h / 2)
         self.coins_total = sum(1 for c in self.level.coins if not c.collected)
         self.coins_collected = 0
         for coin in self.level.coins:
@@ -775,6 +827,19 @@ class PlatformerGame:
         elif item["kind"] == "editor":
             self.launch_editor()
 
+    def _menu_hover(self, pos: tuple[int, int]) -> None:
+        for i, r in enumerate(self._menu_item_rects):
+            if r.collidepoint(pos):
+                self.selected_index = i
+                return
+
+    def _menu_click(self, pos: tuple[int, int]) -> None:
+        for i, r in enumerate(self._menu_item_rects):
+            if r.collidepoint(pos):
+                self.selected_index = i
+                self._activate_menu_item(i)
+                return
+
     def _play_json(self, path: str) -> None:
         from src.levels import level_io
 
@@ -796,6 +861,7 @@ class PlatformerGame:
         # редактор менял режим дисплея — восстановим окно игры
         self.screen = pygame.display.set_mode((W, H))
         pygame.display.set_caption("Платформер")
+        self.held_scancodes.clear()
         self.state = GameState.LEVEL_SELECT
         self._refresh_menu_items()
 
@@ -816,8 +882,19 @@ class PlatformerGame:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return False
+            if event.type == pygame.KEYUP:
+                self.held_scancodes.discard(getattr(event, "scancode", -1))
+                continue
+            if event.type == pygame.MOUSEMOTION and self.state == GameState.LEVEL_SELECT:
+                self._menu_hover(event.pos)
+                continue
+            if event.type == pygame.MOUSEBUTTONDOWN and self.state == GameState.LEVEL_SELECT:
+                if event.button == 1:
+                    self._menu_click(event.pos)
+                continue
             if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
+                self.held_scancodes.add(getattr(event, "scancode", -1))
+                if evt_is(event, (pygame.KSCAN_ESCAPE,), (pygame.K_ESCAPE,)):
                     if self.state == GameState.LEVEL_SELECT:
                         return False
                     self.state = GameState.LEVEL_SELECT
@@ -825,21 +902,23 @@ class PlatformerGame:
                 if self.state == GameState.LEVEL_SELECT:
                     self._refresh_menu_items()
                     n = len(self.menu_items)
-                    if event.key in (pygame.K_UP, pygame.K_w):
+                    if evt_is(event, (pygame.KSCAN_UP, pygame.KSCAN_W), (pygame.K_UP, pygame.K_w)):
                         self.selected_index = (self.selected_index - 1) % n
-                    elif event.key in (pygame.K_DOWN, pygame.K_s):
+                    elif evt_is(event, (pygame.KSCAN_DOWN, pygame.KSCAN_S), (pygame.K_DOWN, pygame.K_s)):
                         self.selected_index = (self.selected_index + 1) % n
-                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    elif evt_is(event, (pygame.KSCAN_RETURN, pygame.KSCAN_SPACE),
+                                (pygame.K_RETURN, pygame.K_SPACE)):
                         self._activate_menu_item(self.selected_index)
-                    elif event.key == pygame.K_e:
+                    elif evt_is(event, (pygame.KSCAN_E,), (pygame.K_e,)):
                         self.launch_editor()
-                    elif pygame.K_1 <= event.key <= pygame.K_9:
-                        idx = event.key - pygame.K_1
-                        if idx < n:
-                            self.selected_index = idx
-                            self._activate_menu_item(idx)
+                    else:
+                        num = evt_number(event)
+                        if num is not None and num < n:
+                            self.selected_index = num
+                            self._activate_menu_item(num)
                 elif self.state in (GameState.LEVEL_COMPLETE, GameState.WIN, GameState.DEAD):
-                    if event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_r):
+                    if evt_is(event, (pygame.KSCAN_RETURN, pygame.KSCAN_SPACE, pygame.KSCAN_R),
+                              (pygame.K_RETURN, pygame.K_SPACE, pygame.K_r)):
                         if self.state == GameState.DEAD:
                             if self.level_index < 0 and self._external_level is not None:
                                 self.play_level_data(self._external_level)
@@ -868,14 +947,13 @@ class PlatformerGame:
     def update_playing(self, dt: float) -> None:
         assert self.level is not None
         p = self.player
-        keys = pygame.key.get_pressed()
         p.portal_cooldown = max(0.0, p.portal_cooldown - dt)
         p.low_grav_timer = max(0.0, p.low_grav_timer - dt)
         self.level_time += dt
 
-        # --- горизонтальное движение (стрелки и WASD дублируют друг друга) ---
-        left = keys[pygame.K_LEFT] or keys[pygame.K_a]
-        right = keys[pygame.K_RIGHT] or keys[pygame.K_d]
+        # --- горизонтальное движение (стрелки/WASD/русская раскладка через scancode) ---
+        left = self._held(*SC_LEFT)
+        right = self._held(*SC_RIGHT)
         want = (-1 if left else 0) + (1 if right else 0)
 
         accel = Feel.GROUND_ACCEL if p.on_ground else Feel.AIR_ACCEL
@@ -891,7 +969,7 @@ class PlatformerGame:
 
         # --- переворот гравитации: G / Shift, стоя на поверхности ---
         g = p.gravity_dir
-        flip_pressed = keys[pygame.K_g] or keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
+        flip_pressed = self._held(*SC_FLIP)
         if flip_pressed and not p.flip_held and p.on_ground:
             p.gravity_dir = -g
             g = p.gravity_dir
@@ -901,7 +979,7 @@ class PlatformerGame:
         p.flip_held = flip_pressed
 
         # --- прыжок: буфер, coyote time, variable height (с учётом направления g) ---
-        jump_pressed = keys[pygame.K_SPACE] or keys[pygame.K_w] or keys[pygame.K_UP]
+        jump_pressed = self._held(*SC_JUMP)
         rising = p.vy * g < 0  # движется против гравитации = взлетает
         if jump_pressed:
             p.jump_buffer_timer = Feel.JUMP_BUFFER
@@ -941,10 +1019,11 @@ class PlatformerGame:
         self.move_axis(p, p.vy, "y")
 
         # падение в бездну (в любую сторону при перевёрнутой гравитации)
-        if p.y > H + 80 or p.y + p.h < -80:
+        world_h = getattr(self.level, "world_h", H)
+        if p.y > world_h + 80 or p.y + p.h < -80:
             self.kill_player()
 
-        self.camera.update(p.x + p.w / 2)
+        self.camera.update(p.x + p.w / 2, p.y + p.h / 2)
 
         # монеты
         pr = p.rect
@@ -966,7 +1045,7 @@ class PlatformerGame:
         for button in self.level.buttons:
             if pr.colliderect(button.rect.inflate(18, 18)):
                 self.near_button = True
-                if keys[pygame.K_f]:
+                if self._held(*SC_INTERACT):
                     button.pressed = True
                     for gate in self.level.gates:
                         gate.opened = True
@@ -979,10 +1058,7 @@ class PlatformerGame:
                     p.vx = 0.0
                     p.vy = 0.0
                     p.portal_cooldown = 0.6
-                    self.camera.x = max(
-                        0.0,
-                        min(p.x + p.w / 2 - W * 0.35, float(self.level.world_w - W)),
-                    )
+                    self.camera.snap(p.x + p.w / 2, p.y + p.h / 2)
                     break
 
         # паверапы (низкая гравитация)
@@ -1115,7 +1191,7 @@ class PlatformerGame:
             p.frame_index = 0
             p.anim_timer = 0.0
         p.anim_timer += dt
-        speed = 0.10 if new_state == "run" else 0.25
+        speed = 0.07 if new_state == "run" else 0.22
         if p.anim_timer >= speed:
             p.anim_timer -= speed
             p.frame_index += 1
@@ -1146,6 +1222,7 @@ class PlatformerGame:
                 pygame.draw.line(self.screen, c, (0, i), (W, i))
 
         cam_x = int(self.camera.x)
+        cam_y = int(self.camera.y)
         use_sprites = self._has_sprites()
 
         # платформы: тайлим спрайт по сетке, иначе прямоугольник
@@ -1230,7 +1307,7 @@ class PlatformerGame:
             if coin.collected:
                 continue
             sx = int(coin.x - cam_x)
-            sy = int(coin.y)
+            sy = int(coin.y - cam_y)
             if sx < -20 or sx > W + 20:
                 continue
             bob = math.sin(t + coin.x * 0.01) * 3
@@ -1254,7 +1331,7 @@ class PlatformerGame:
             if pu.collected:
                 continue
             sx = int(pu.x - cam_x)
-            sy = int(pu.y)
+            sy = int(pu.y - cam_y)
             if sx < -30 or sx > W + 30:
                 continue
             pr_ = int(2 * (1 + math.sin(pt)))
@@ -1268,7 +1345,7 @@ class PlatformerGame:
         # турели (тумбы со стволом по направлению огня)
         for tu in self.level.turrets:
             bx = int(tu.x - cam_x)
-            by = int(tu.y)
+            by = int(tu.y - cam_y)
             if bx < -30 or bx > W + 30:
                 continue
             pygame.draw.rect(self.screen, TURRET, (bx - 12, by - 12, 24, 24), border_radius=4)
@@ -1281,7 +1358,7 @@ class PlatformerGame:
         # снаряды-шипы
         for pj in self.projectiles:
             sx = int(pj.x - cam_x)
-            sy = int(pj.y)
+            sy = int(pj.y - cam_y)
             if sx < -20 or sx > W + 20:
                 continue
             pygame.draw.circle(self.screen, PROJECTILE, (sx, sy), int(pj.r))
@@ -1291,7 +1368,7 @@ class PlatformerGame:
         for saw in self.level.saws:
             cx, cy = saw.pos(self.level_time)
             sx = int(cx - cam_x)
-            sy = int(cy)
+            sy = int(cy - cam_y)
             if sx < -40 or sx > W + 40:
                 continue
             r = int(saw.r)
@@ -1446,6 +1523,8 @@ class PlatformerGame:
         n = len(self.menu_items)
         step = 40 if n <= 9 else 32
         y = 110
+        self._menu_item_rects = []
+        row_w = 460
         for i, item in enumerate(self.menu_items):
             selected = i == self.selected_index
             label = item["label"]
@@ -1459,19 +1538,19 @@ class PlatformerGame:
             else:
                 base_color = UI_DIM
             color = (255, 240, 140) if selected else base_color
-            surf = self.font.render(prefix + label, True, color)
-            x = W // 2 - surf.get_width() // 2
+            # кликабельная строка (мышь)
+            row = pygame.Rect(W // 2 - row_w // 2, y - 4, row_w, step - 4)
+            self._menu_item_rects.append(row)
             if selected:
-                box = pygame.Rect(x - 24, y - 4, surf.get_width() + 48, step - 4)
-                pygame.draw.rect(self.screen, (255, 255, 255), box, 2, border_radius=6)
-                marker = self.font.render(">", True, (255, 240, 140))
-                self.screen.blit(marker, (x - 24, y))
-            self.screen.blit(surf, (x, y))
+                pygame.draw.rect(self.screen, (50, 70, 110), row, border_radius=6)
+                pygame.draw.rect(self.screen, (255, 255, 255), row, 2, border_radius=6)
+            surf = self.font.render(prefix + label, True, color)
+            self.screen.blit(surf, (W // 2 - surf.get_width() // 2, y))
             y += step
 
         hints = [
-            "↑ ↓ / W S — выбор    Enter — играть/открыть    1–9 — быстрый выбор",
-            "E — редактор уровней    Esc — выход в главное меню",
+            "Мышь: наведи и кликни    ↑↓/WS — выбор    Enter — играть/открыть",
+            "1–9 — быстрый выбор    E — редактор    Esc — в главное меню",
         ]
         hy = max(y + 16, H - 64)
         for line in hints:

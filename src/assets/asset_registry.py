@@ -16,8 +16,8 @@ from . import asset_loader
 # Соответствия сущность → путь(и) ассета (относительно assets/)
 ASSETS: dict[str, dict] = {
     "player": {
-        "idle": ["player/idle_0.png", "player/idle_1.png"],
-        "run": ["player/run_0.png", "player/run_1.png", "player/run_2.png", "player/run_3.png"],
+        "idle": [f"player/idle_{i}.png" for i in range(4)],
+        "run": [f"player/run_{i}.png" for i in range(6)],
         "jump": ["player/jump.png"],
         "fall": ["player/fall.png"],
     },
@@ -28,14 +28,17 @@ ASSETS: dict[str, dict] = {
         "dirt": "tiles/dirt.png",
     },
     "enemies": {
-        "slime": {"idle": ["enemies/slime_idle_0.png", "enemies/slime_idle_1.png"]},
+        "slime": {"idle": [f"enemies/slime_idle_{i}.png" for i in range(4)]},
     },
     "items": {
-        "coin": ["items/coin_0.png", "items/coin_1.png", "items/coin_2.png", "items/coin_3.png"],
+        "coin": [f"items/coin_{i}.png" for i in range(4)],
+        "gem": [f"items/gem_{i}.png" for i in range(4)],
+        "key": ["items/key.png"],
         "flag": ["items/flag.png"],
     },
     "obstacles": {
         "spikes": "obstacles/spikes.png",
+        "saw": "obstacles/saw.png",
     },
     "backgrounds": {
         "default": "backgrounds/default.png",

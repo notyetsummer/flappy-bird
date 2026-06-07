@@ -41,6 +41,7 @@ def new_level(name: str = "untitled", width_tiles: int = 60, height_tiles: int =
         "enemies": [],
         "items": [],
         "obstacles": [],
+        "saws": [],
         "decorations": [],
     }
 
@@ -70,7 +71,7 @@ def _normalize(data: dict[str, Any]) -> dict[str, Any]:
     base = new_level()
     base.update({k: v for k, v in data.items() if v is not None})
     # гарантируем наличие списков
-    for key in ("tiles", "platforms", "enemies", "items", "obstacles", "decorations"):
+    for key in ("tiles", "platforms", "enemies", "items", "obstacles", "saws", "decorations"):
         if not isinstance(base.get(key), list):
             base[key] = []
     base["tile_size"] = int(base.get("tile_size", DEFAULT_TILE_SIZE))
@@ -86,6 +87,7 @@ def dict_to_leveldata(level: dict[str, Any]):
     level = _normalize(level)
     ts = level["tile_size"]
     world_w = max(P.W, level["width_tiles"] * ts)
+    world_h = max(P.H, level["height_tiles"] * ts)
 
     platforms: list = []
     # сетка тайлов → твёрдые квадраты
@@ -119,6 +121,16 @@ def dict_to_leveldata(level: dict[str, Any]):
             patrol_right=props.get("patrol_right", en["x"] + 80),
         ))
 
+    saws: list = []
+    for sw in level.get("saws", []):
+        saws.append(P.Saw(
+            x1=float(sw["x1"]), y1=float(sw["y1"]),
+            x2=float(sw.get("x2", sw["x1"])), y2=float(sw.get("y2", sw["y1"])),
+            r=float(sw.get("r", 26.0)),
+            period=float(sw.get("period", 2.4)),
+            phase=float(sw.get("phase", 0.0)),
+        ))
+
     end = level["level_end"]
     goal = P.RectObj(end["x"], end["y"], 40, 70, tile_id="flag")
 
@@ -128,11 +140,13 @@ def dict_to_leveldata(level: dict[str, Any]):
     return P.LevelData(
         name=level.get("name", "JSON level"),
         world_w=int(world_w),
+        world_h=int(world_h),
         spawn=spawn,
         platforms=platforms,
         spikes=spikes,
         coins=coins,
         enemies=enemies,
+        saws=saws,
         goal=goal,
         background=level.get("background", "default"),
     )

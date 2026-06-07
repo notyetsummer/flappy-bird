@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 
@@ -64,38 +65,92 @@ def _outline(surf: pygame.Surface, color=OUTLINE) -> None:
     pygame.draw.rect(surf, color, surf.get_rect(), 1)
 
 
-# ---------- генераторы спрайтов (база 16x16, кроме фона/флага) ----------
+# ---------- генераторы спрайтов (база 16x16, игрок 24x24) ----------
 
-def make_player(frame: str) -> pygame.Surface:
-    s = _surf(16, 16)
-    body = (70, 130, 220)
-    dark = (40, 90, 180)
-    skin = (245, 220, 180)
-    # ноги (анимируются для бега)
-    if frame == "run_0":
-        legs = [(4, 13, 3, 3), (9, 12, 3, 4)]
-    elif frame == "run_1":
-        legs = [(4, 12, 3, 4), (9, 13, 3, 3)]
-    elif frame == "run_2":
-        legs = [(3, 13, 3, 3), (10, 12, 3, 4)]
-    elif frame == "run_3":
-        legs = [(5, 12, 3, 4), (8, 13, 3, 3)]
-    elif frame in ("jump", "fall"):
-        legs = [(4, 12, 3, 3), (9, 12, 3, 3)]
-    else:  # idle
-        legs = [(4, 13, 3, 3), (9, 13, 3, 3)]
-    for lx, ly, lw, lh in legs:
-        pygame.draw.rect(s, dark, (lx, ly, lw, lh))
+# палитра персонажа
+P_SKIN = (245, 205, 165)
+P_HAIR = (60, 42, 34)
+P_SHIRT = (80, 140, 235)
+P_SHIRT_D = (50, 100, 190)
+P_PANTS = (70, 72, 95)
+P_PANTS_D = (48, 50, 68)
+P_BOOT = (38, 38, 50)
+P_SCARF = (225, 80, 92)
+
+
+def _limb(s, p0, p1, color, w):
+    pygame.draw.line(s, color, (int(p0[0]), int(p0[1])), (int(p1[0]), int(p1[1])), w)
+
+
+def make_player(state: str, i: int = 0, total: int = 1) -> pygame.Surface:
+    """Анимированный человечек 24x24 с конечностями (бег/idle/прыжок/падение)."""
+    s = _surf(24, 24)
+    cx = 12
+    if state == "run":
+        ph = (i / total) * 2 * math.pi
+        leg = math.sin(ph) * 4.5
+        arm = -math.sin(ph) * 4.0
+        bob = -abs(math.cos(ph)) * 1.6
+        lean = 2
+    elif state == "idle":
+        ph = (i / max(1, total)) * 2 * math.pi
+        bob = math.sin(ph) * 1.0
+        leg = 0.0
+        arm = math.sin(ph) * 0.6
+        lean = 0
+    elif state == "jump":
+        leg, arm, bob, lean = -3.0, -5.0, -1.0, 1
+    elif state == "fall":
+        leg, arm, bob, lean = 3.0, 5.0, 1.0, 1
+    else:
+        leg = arm = bob = 0.0
+        lean = 0
+
+    top = int(4 + bob)
+    sh_y = top + 7
+    hip_y = top + 13
+
+    # ноги
+    for sign in (-1, 1):
+        dx = sign * leg
+        hipx = cx + sign * 2
+        knee = (hipx + dx / 2, hip_y + 4)
+        foot = (hipx + dx, hip_y + 8)
+        _limb(s, (hipx, hip_y), knee, P_PANTS, 4)
+        _limb(s, knee, foot, P_PANTS_D, 4)
+        pygame.draw.rect(s, P_BOOT, (int(foot[0]) - 2, int(foot[1]) - 1, 5, 3))
+
+    # дальняя рука (за телом)
+    back = (cx - 4, sh_y)
+    back_h = (cx - 4 - arm, sh_y + 8)
+    _limb(s, back, (back[0] - arm / 2, sh_y + 4), P_SHIRT_D, 3)
+    _limb(s, (back[0] - arm / 2, sh_y + 4), back_h, P_SKIN, 3)
+
     # туловище
-    pygame.draw.rect(s, body, (3, 6, 10, 7))
-    pygame.draw.rect(s, dark, (3, 6, 10, 7), 1)
+    pygame.draw.rect(s, P_SHIRT, (cx - 4 + lean, sh_y - 1, 8, 9), border_radius=2)
+    pygame.draw.rect(s, P_SHIRT_D, (cx - 4 + lean, sh_y - 1, 8, 9), 1, border_radius=2)
+
+    # шарф (развевается)
+    tail = abs(leg) + (3 if state in ("run", "fall") else 1)
+    pygame.draw.polygon(s, P_SCARF, [
+        (cx - 3 + lean, sh_y),
+        (cx - 7 + lean - int(arm), sh_y + 2 + int(tail)),
+        (cx - 2 + lean, sh_y + 3),
+    ])
+
+    # передняя рука
+    sh = (cx + 4 + lean, sh_y)
+    elbow = (sh[0] + arm / 2, sh_y + 4)
+    hand = (sh[0] + arm, sh_y + 8)
+    _limb(s, sh, elbow, P_SHIRT, 3)
+    _limb(s, elbow, hand, P_SKIN, 3)
+
     # голова
-    pygame.draw.rect(s, skin, (4, 1, 8, 6))
-    pygame.draw.rect(s, OUTLINE, (4, 1, 8, 6), 1)
-    # глаз (смотрит вправо)
-    pygame.draw.rect(s, OUTLINE, (9, 3, 2, 2))
-    if frame == "jump":
-        pygame.draw.rect(s, body, (1, 5, 2, 4))  # рука вверх
+    hx = cx + lean
+    pygame.draw.circle(s, P_SKIN, (hx, top + 2), 4)
+    pygame.draw.circle(s, OUTLINE, (hx, top + 2), 4, 1)
+    pygame.draw.rect(s, P_HAIR, (hx - 4, top - 2, 8, 4), border_radius=2)
+    pygame.draw.rect(s, OUTLINE, (hx + 1, top + 1, 2, 2))  # глаз вправо
     return s
 
 
@@ -150,14 +205,64 @@ def make_spikes() -> pygame.Surface:
     return s
 
 
+def make_saw() -> pygame.Surface:
+    s = _surf(32, 32)
+    cx = cy = 16
+    steel, steel_d, hub = (200, 205, 215), (130, 135, 150), (90, 95, 110)
+    teeth = 12
+    outer, inner = 15, 11
+    pts = []
+    for i in range(teeth * 2):
+        ang = math.pi * i / teeth
+        rad = outer if i % 2 == 0 else inner
+        pts.append((cx + rad * math.cos(ang), cy + rad * math.sin(ang)))
+    pygame.draw.polygon(s, steel, pts)
+    pygame.draw.polygon(s, steel_d, pts, 1)
+    pygame.draw.circle(s, hub, (cx, cy), 6)
+    pygame.draw.circle(s, (60, 64, 78), (cx, cy), 6, 1)
+    pygame.draw.circle(s, (40, 44, 56), (cx, cy), 2)
+    return s
+
+
 def make_slime(frame: int) -> pygame.Surface:
     s = _surf(16, 16)
-    squash = 0 if frame == 0 else 2
-    top = 6 + squash
-    pygame.draw.ellipse(s, (90, 200, 110), (1, top, 14, 16 - top))
-    pygame.draw.ellipse(s, (60, 160, 80), (1, top, 14, 16 - top), 1)
-    pygame.draw.rect(s, OUTLINE, (5, top + 2, 2, 2))
-    pygame.draw.rect(s, OUTLINE, (9, top + 2, 2, 2))
+    # пульсация: 4 кадра дыхания/прыжочка
+    squash = [0, 2, 3, 1][frame % 4]
+    top = 5 + squash
+    width = 14 + (3 - squash)
+    x0 = (16 - width) // 2
+    pygame.draw.ellipse(s, (90, 200, 110), (x0, top, width, 16 - top))
+    pygame.draw.ellipse(s, (60, 160, 80), (x0, top, width, 16 - top), 1)
+    pygame.draw.ellipse(s, (150, 230, 160), (x0 + 2, top + 1, width - 6, 3))  # блик
+    blink = frame % 4 == 2
+    eh = 1 if blink else 2
+    pygame.draw.rect(s, OUTLINE, (5, top + 3, 2, eh))
+    pygame.draw.rect(s, OUTLINE, (9, top + 3, 2, eh))
+    return s
+
+
+def make_gem(frame: int) -> pygame.Surface:
+    s = _surf(16, 16)
+    col, hi, dk = (90, 210, 235), (210, 250, 255), (40, 150, 185)
+    pts = [(8, 1), (14, 7), (8, 15), (2, 7)]
+    pygame.draw.polygon(s, col, pts)
+    pygame.draw.polygon(s, dk, pts, 1)
+    pygame.draw.line(s, hi, (8, 2), (5, 7), 1)
+    pygame.draw.line(s, dk, (8, 14), (12, 7), 1)
+    if frame % 4 in (1, 3):  # блестит
+        pygame.draw.line(s, (255, 255, 255), (12, 2), (12, 4))
+        pygame.draw.line(s, (255, 255, 255), (11, 3), (13, 3))
+    return s
+
+
+def make_key() -> pygame.Surface:
+    s = _surf(16, 16)
+    g, gd = (240, 205, 70), (190, 150, 40)
+    pygame.draw.circle(s, g, (5, 6), 4, 2)
+    pygame.draw.circle(s, gd, (5, 6), 4, 1)
+    pygame.draw.rect(s, g, (8, 5, 7, 2))
+    pygame.draw.rect(s, g, (12, 7, 2, 3))
+    pygame.draw.rect(s, g, (14, 7, 2, 2))
     return s
 
 
@@ -178,11 +283,17 @@ def make_background() -> pygame.Surface:
             int(230 * (1 - t) + 150 * t),
         )
         pygame.draw.line(s, c, (0, y), (480, y))
-    # дальние холмы
-    pygame.draw.ellipse(s, (90, 160, 110), (-40, 180, 280, 180))
-    pygame.draw.ellipse(s, (80, 145, 100), (200, 200, 360, 180))
+    # солнце с гало
+    pygame.draw.circle(s, (255, 245, 200), (400, 60), 26)
+    pygame.draw.circle(s, (255, 235, 160), (400, 60), 20)
+    # дальние горы (силуэт)
+    pygame.draw.polygon(s, (120, 150, 180), [(0, 200), (90, 120), (180, 200)])
+    pygame.draw.polygon(s, (110, 140, 170), [(120, 200), (240, 110), (360, 200)])
+    # холмы ближе
+    pygame.draw.ellipse(s, (95, 170, 115), (-40, 180, 300, 200))
+    pygame.draw.ellipse(s, (80, 150, 100), (200, 200, 380, 200))
     # облака
-    for cx, cy in [(80, 50), (300, 80), (400, 40)]:
+    for cx, cy in [(80, 50), (300, 90), (180, 40)]:
         pygame.draw.ellipse(s, (245, 250, 255), (cx, cy, 70, 28))
         pygame.draw.ellipse(s, (245, 250, 255), (cx + 24, cy - 10, 60, 26))
     return s
@@ -214,11 +325,11 @@ def generate_all() -> list[str]:
         _save(surf, rel)
         created.append(rel)
 
-    # игрок
-    emit(make_player("idle"), "player/idle_0.png")
-    emit(make_player("idle"), "player/idle_1.png")
+    # игрок: idle (4), бег (6), прыжок, падение
     for i in range(4):
-        emit(make_player(f"run_{i}"), f"player/run_{i}.png")
+        emit(make_player("idle", i, 4), f"player/idle_{i}.png")
+    for i in range(6):
+        emit(make_player("run", i, 6), f"player/run_{i}.png")
     emit(make_player("jump"), "player/jump.png")
     emit(make_player("fall"), "player/fall.png")
 
@@ -230,12 +341,18 @@ def generate_all() -> list[str]:
     for i in range(4):
         emit(make_coin(i), f"items/coin_{i}.png")
 
+    # самоцветы и ключ
+    for i in range(4):
+        emit(make_gem(i), f"items/gem_{i}.png")
+    emit(make_key(), "items/key.png")
+
     # препятствия
     emit(make_spikes(), "obstacles/spikes.png")
+    emit(make_saw(), "obstacles/saw.png")
 
-    # враги
-    emit(make_slime(0), "enemies/slime_idle_0.png")
-    emit(make_slime(1), "enemies/slime_idle_1.png")
+    # враги (4 кадра дыхания)
+    for i in range(4):
+        emit(make_slime(i), f"enemies/slime_idle_{i}.png")
 
     # прочее
     emit(make_flag(), "items/flag.png")

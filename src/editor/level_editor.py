@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import copy
+import math
 from pathlib import Path
 
 import pygame
@@ -30,7 +32,7 @@ from src.levels import level_io
 
 EDITOR_W, EDITOR_H = 1120, 630
 PALETTE_W = 200
-TOOLBAR_H = 40
+TOOLBAR_H = 58
 
 BG = (28, 32, 44)
 PANEL = (40, 46, 62)
@@ -66,10 +68,25 @@ MODE_LABELS = {
     "test": "0 Test",
 }
 
+MODE_ORDER = [
+    "tiles", "platforms", "enemies", "items", "obstacles",
+    "player_start", "level_end", "select", "background", "test",
+]
+
+# scancode → режим (физические цифры, работает на любой раскладке)
+MODES_SC = {getattr(pygame, f"KSCAN_{(i + 1) % 10}"): m for i, m in enumerate(MODE_ORDER)}
+
+# scancode-группы камеры (раскладко-независимо)
+SC_CAM_LEFT = (pygame.KSCAN_A, pygame.KSCAN_LEFT)
+SC_CAM_RIGHT = (pygame.KSCAN_D, pygame.KSCAN_RIGHT)
+SC_CAM_UP = (pygame.KSCAN_W, pygame.KSCAN_UP)
+SC_CAM_DOWN = (pygame.KSCAN_S, pygame.KSCAN_DOWN)
+
 
 class LevelEditor:
     def __init__(self, level: dict | None = None) -> None:
         self.level = level or level_io.new_level("level_editor", width_tiles=60, height_tiles=11)
+        self.level.setdefault("saws", [])
         self.assets = get_asset_manager()
         self.mode = "tiles"
         self.cam_x = 0.0
@@ -78,10 +95,156 @@ class LevelEditor:
         self.brush = 1
         self.show_grid = True
         self.show_hitboxes = False
-        self.message = "Редактор: ЛКМ — поставить, ПКМ — удалить, T — тест, Ctrl+S — save"
+        self.eraser = False
+        self.message = "Редактор: ЛКМ — поставить, ПКМ/Ластик — удалить, T — тест, Ctrl+S — save"
         # выбранные индексы ассетов по категориям
         self.sel = {"tiles": 0, "items": 0, "enemies": 0, "obstacles": 0, "background": 0}
+        # размер окна (можно растягивать) и рабочая область
+        self.width = EDITOR_W
+        self.height = EDITOR_H
         self.canvas = pygame.Rect(PALETTE_W, TOOLBAR_H, EDITOR_W - PALETTE_W, EDITOR_H - TOOLBAR_H)
+        # история изменений (undo/redo)
+        self._undo: list[dict] = []
+        self._redo: list[dict] = []
+        # черновик пилы и её параметры
+        self.saw_draft: tuple[float, float] | None = None
+        self.saw_r = 26.0
+        self.saw_period = 2.4
+        self.saw_phase = 0.0  # 0 = вперёд (к концу), pi = назад (к старту)
+        # UI: физически зажатые клавиши (камера), мышиные элементы
+        self.held_sc: set[int] = set()
+        self.dropdown_open = False
+        self.load_open = False
+        self.ui: dict[str, pygame.Rect] = {}
+        self.palette_rects: list[tuple[pygame.Rect, int]] = []
+        self.dropdown_rects: list[tuple[pygame.Rect, str]] = []
+        self.load_rects: list[tuple[pygame.Rect, Path]] = []
+
+    def _held(self, *scancodes: int) -> bool:
+        return any(s in self.held_sc for s in scancodes)
+
+    # ---------- размер окна ----------
+    def set_size(self, w: int, h: int) -> None:
+        self.width = max(720, w)
+        self.height = max(420, h)
+        self.canvas = pygame.Rect(PALETTE_W, TOOLBAR_H,
+                                  self.width - PALETTE_W, self.height - TOOLBAR_H)
+
+    # ---------- история (undo/redo) ----------
+    def push_undo(self) -> None:
+        self._undo.append(copy.deepcopy(self.level))
+        if len(self._undo) > 60:
+            self._undo.pop(0)
+        self._redo.clear()
+
+    def undo(self) -> None:
+        if not self._undo:
+            self.message = "Откатывать нечего"
+            return
+        self._redo.append(copy.deepcopy(self.level))
+        self.level = self._undo.pop()
+        self.saw_draft = None
+        self.message = "Отменено (Ctrl+Z)"
+
+    def redo(self) -> None:
+        if not self._redo:
+            self.message = "Повторять нечего"
+            return
+        self._undo.append(copy.deepcopy(self.level))
+        self.level = self._redo.pop()
+        self.message = "Повторено (Ctrl+Y)"
+
+    def is_saw_tool(self) -> bool:
+        return self.mode == "obstacles" and self.selected_id("obstacles") == "saw"
+
+    def set_mode(self, mode: str) -> None:
+        self.mode = mode
+        self.message = f"Режим: {MODE_LABELS.get(mode, mode)}"
+
+    def on_mouse_down(self, pos: tuple[int, int], button: int) -> str | None:
+        """Обработка клика мыши по UI/холсту. Возвращает 'test' для playtest."""
+        if button == 3:
+            if self.canvas.collidepoint(pos):
+                self.push_undo()
+                self.erase(*pos)
+            return None
+        if button != 1:
+            return None
+        # открытый список файлов для загрузки
+        if self.load_open:
+            for rect, path in self.load_rects:
+                if rect.collidepoint(pos):
+                    self.load_open = False
+                    self.load_path(path)
+                    return None
+            self.load_open = False
+            return None
+        # открытый выпадающий список режимов
+        if self.dropdown_open:
+            for rect, mode in self.dropdown_rects:
+                if rect.collidepoint(pos):
+                    self.dropdown_open = False
+                    if mode == "test":
+                        return "test"
+                    self.set_mode(mode)
+                    return None
+            self.dropdown_open = False
+            return None
+        # кнопки верхней панели
+        for name, rect in self.ui.items():
+            if rect.collidepoint(pos):
+                if name == "save":
+                    self.save()
+                elif name == "load":
+                    self.load_open = not self.load_open
+                elif name == "test":
+                    return "test"
+                elif name == "mode":
+                    self.dropdown_open = True
+                elif name == "eraser":
+                    self.eraser = not self.eraser
+                    self.message = "Ластик ВКЛ (ЛКМ стирает)" if self.eraser else "Ластик ВЫКЛ"
+                elif name == "undo":
+                    self.undo()
+                elif name == "redo":
+                    self.redo()
+                elif name == "grow_up":
+                    self.grow_up(2)
+                elif name == "grow_down":
+                    self.grow_down(2)
+                elif name == "saw_r_dec":
+                    self.saw_r = max(10.0, self.saw_r - 2)
+                elif name == "saw_r_inc":
+                    self.saw_r = min(60.0, self.saw_r + 2)
+                elif name == "saw_t_dec":
+                    self.saw_period = max(0.6, round(self.saw_period - 0.2, 2))
+                elif name == "saw_t_inc":
+                    self.saw_period = min(8.0, round(self.saw_period + 0.2, 2))
+                elif name == "saw_dir":
+                    self.saw_phase = 0.0 if self.saw_phase else math.pi
+                return None
+        # клик по строке палитры → выбрать ассет
+        for rect, idx in self.palette_rects:
+            if rect.collidepoint(pos):
+                cat = self.mode if self.mode in self.sel else None
+                if cat is not None:
+                    self.sel[cat] = idx
+                    self.message = f"{self.mode}: {self.selected_id(cat)}"
+                    self.saw_draft = None
+                return None
+        # клик по холсту
+        if self.canvas.collidepoint(pos):
+            if self.eraser:
+                self.push_undo()
+                self.erase(*pos)
+            elif self.is_saw_tool():
+                if self.saw_draft is not None:
+                    self.push_undo()  # фиксируем добавление пилы
+                self.place(*pos)
+            else:
+                self.push_undo()
+                self.place(*pos)
+        return None
 
     # ---------- геометрия ----------
     @property
@@ -158,12 +321,15 @@ class LevelEditor:
                 "asset_id": self.selected_id("items"),
             })
         elif self.mode == "obstacles":
-            self.level["obstacles"].append({
-                "x": cx * ts, "y": cy * ts + ts - 18,
-                "width": ts, "height": 18,
-                "obstacle_type": self.selected_id("obstacles"),
-                "asset_id": self.selected_id("obstacles"),
-            })
+            if self.selected_id("obstacles") == "saw":
+                self._place_saw(wx, wy)
+            else:
+                self.level["obstacles"].append({
+                    "x": cx * ts, "y": cy * ts + ts - 18,
+                    "width": ts, "height": 18,
+                    "obstacle_type": self.selected_id("obstacles"),
+                    "asset_id": self.selected_id("obstacles"),
+                })
         elif self.mode == "player_start":
             self.level["player"]["start_x"] = int(wx)
             self.level["player"]["start_y"] = int(wy)
@@ -183,6 +349,36 @@ class LevelEditor:
         self._del_tile(cx, cy)
         for key in ("platforms", "enemies", "items", "obstacles"):
             self._del_object_at(key, wx, wy)
+        self._del_saw_at(wx, wy)
+
+    # ---------- пилы ----------
+    def _place_saw(self, wx: float, wy: float) -> None:
+        if self.saw_draft is None:
+            self.saw_draft = (wx, wy)
+            self.message = "Пила: кликни КОНЕЦ маршрута (точка = на месте)"
+            return
+        x1, y1 = self.saw_draft
+        self.level.setdefault("saws", []).append({
+            "x1": round(x1), "y1": round(y1),
+            "x2": round(wx), "y2": round(wy),
+            "r": round(self.saw_r), "period": round(self.saw_period, 2),
+            "phase": round(self.saw_phase, 3),
+        })
+        self.saw_draft = None
+        self.message = "Пила добавлена (маршрут, размер, скорость, направление)"
+
+    def _del_saw_at(self, wx: float, wy: float) -> None:
+        saws = self.level.get("saws", [])
+        keep = []
+        for sw in saws:
+            # рядом с любым концом маршрута или его серединой → удалить
+            pts = [(sw["x1"], sw["y1"]), (sw["x2"], sw["y2"]),
+                   ((sw["x1"] + sw["x2"]) / 2, (sw["y1"] + sw["y2"]) / 2)]
+            hit = any((wx - px) ** 2 + (wy - py) ** 2 <= (sw.get("r", 26) + 6) ** 2
+                      for px, py in pts)
+            if not hit:
+                keep.append(sw)
+        self.level["saws"] = keep
 
     def _set_tile(self, cx: int, cy: int, tile_id: str) -> None:
         if not (0 <= cx < self.level["width_tiles"] and 0 <= cy < self.level["height_tiles"]):
@@ -212,6 +408,7 @@ class LevelEditor:
 
     # ---------- размер уровня ----------
     def resize_width(self, delta_tiles: int) -> None:
+        self.push_undo()
         new_w = max(10, self.level["width_tiles"] + delta_tiles)
         if delta_tiles < 0:
             lost = self._objects_beyond(new_w * self.tile_size, None)
@@ -221,6 +418,7 @@ class LevelEditor:
         self.message = f"Ширина уровня: {new_w} тайлов"
 
     def resize_height(self, delta_tiles: int) -> None:
+        self.push_undo()
         new_h = max(7, self.level["height_tiles"] + delta_tiles)
         if delta_tiles < 0:
             lost = self._objects_beyond(None, new_h * self.tile_size)
@@ -245,7 +443,55 @@ class LevelEditor:
                     n += 1
         return n
 
+    def grow_up(self, delta_tiles: int = 2) -> None:
+        """Нарастить уровень сверху: добавить ряды над сценой, сдвинув всё вниз."""
+        self.push_undo()
+        ts = self.tile_size
+        dy_px = delta_tiles * ts
+        self.level["height_tiles"] += delta_tiles
+        for t in self.level["tiles"]:
+            t["y"] += delta_tiles
+        for key in ("platforms", "enemies", "items", "obstacles"):
+            for o in self.level[key]:
+                o["y"] += dy_px
+        for sw in self.level.get("saws", []):
+            sw["y1"] += dy_px
+            sw["y2"] += dy_px
+        self.level["player"]["start_y"] += dy_px
+        self.level["level_end"]["y"] += dy_px
+        self.cam_y += dy_px
+        self.message = f"Сверху добавлено {delta_tiles} рядов (высота {self.level['height_tiles']})"
+
+    def grow_down(self, delta_tiles: int = 2) -> None:
+        """Нарастить уровень снизу: добавить ряды под сценой (объекты на месте)."""
+        self.push_undo()
+        self.level["height_tiles"] += delta_tiles
+        self.message = f"Снизу добавлено {delta_tiles} рядов (высота {self.level['height_tiles']})"
+
     # ---------- save / load ----------
+    def _load_files(self) -> list[Path]:
+        if not level_io.LEVELS_DIR.is_dir():
+            return []
+        files = sorted(
+            p for p in level_io.LEVELS_DIR.glob("*.json")
+            if not p.name.startswith("_")
+        )
+        return files
+
+    def load_path(self, path: Path) -> None:
+        try:
+            self.level = level_io.load_level_file(path)
+            self.level.setdefault("saws", [])
+            self.level["name"] = path.stem  # чтобы Save писал в тот же файл
+            self._undo.clear()
+            self._redo.clear()
+            self.saw_draft = None
+            self.cam_x = self.cam_y = 0.0
+            self.message = f"Загружено: {path.name}"
+        except ValueError as e:
+            self.message = f"Не удалось загрузить: {e}"
+            print(f"[editor] load error: {e}")
+
     def save(self) -> Path:
         path = level_io.LEVELS_DIR / f"{self.level.get('name', 'level_editor')}.json"
         level_io.save_level(self.level, path)
@@ -272,7 +518,7 @@ class LevelEditor:
 def run_editor(level_path: str | None = None) -> None:
     if not pygame.get_init():
         pygame.init()
-    screen = pygame.display.set_mode((EDITOR_W, EDITOR_H))
+    screen = pygame.display.set_mode((EDITOR_W, EDITOR_H), pygame.RESIZABLE)
     pygame.display.set_caption("Level Editor")
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("arial", 16)
@@ -291,6 +537,15 @@ def run_editor(level_path: str | None = None) -> None:
     def tile_surface(tile_id: str, size: int) -> pygame.Surface:
         return am.scaled(am.tile(tile_id), (size, size))
 
+    def do_test() -> None:
+        nonlocal screen
+        _playtest(ed)
+        screen = pygame.display.set_mode((ed.width, ed.height), pygame.RESIZABLE)
+        pygame.display.set_caption("Level Editor")
+
+    def sc(event) -> int:
+        return getattr(event, "scancode", -1)
+
     running = True
     while running:
         dt = clock.tick(60) / 1000.0
@@ -300,75 +555,85 @@ def run_editor(level_path: str | None = None) -> None:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            elif event.type == pygame.VIDEORESIZE:
+                ed.set_size(event.w, event.h)
+                screen = pygame.display.set_mode((ed.width, ed.height), pygame.RESIZABLE)
+            elif event.type == pygame.KEYUP:
+                ed.held_sc.discard(sc(event))
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    running = False
-                elif event.key in MODES:
-                    m = MODES[event.key]
-                    if m == "test":
-                        _playtest(ed)
-                        screen = pygame.display.set_mode((EDITOR_W, EDITOR_H))
-                        pygame.display.set_caption("Level Editor")
+                s = sc(event)
+                ed.held_sc.add(s)
+                if s == pygame.KSCAN_ESCAPE or event.key == pygame.K_ESCAPE:
+                    if ed.dropdown_open or ed.load_open:
+                        ed.dropdown_open = ed.load_open = False
+                    elif ed.saw_draft is not None:
+                        ed.saw_draft = None
+                        ed.message = "Черновик пилы отменён"
                     else:
-                        ed.mode = m
-                        ed.message = f"Режим: {MODE_LABELS[m]}"
-                elif event.key == pygame.K_s and ctrl:
+                        running = False
+                elif s == pygame.KSCAN_Z and ctrl:
+                    ed.undo()
+                elif s in (pygame.KSCAN_Y,) and ctrl:
+                    ed.redo()
+                elif s in MODES_SC:
+                    m = MODES_SC[s]
+                    if m == "test":
+                        do_test()
+                    else:
+                        ed.set_mode(m)
+                elif s == pygame.KSCAN_S and ctrl:
                     ed.save()
-                elif event.key == pygame.K_o and ctrl:
+                elif s == pygame.KSCAN_O and ctrl:
                     ed.load()
-                elif event.key == pygame.K_t:
-                    _playtest(ed)
-                    screen = pygame.display.set_mode((EDITOR_W, EDITOR_H))
-                    pygame.display.set_caption("Level Editor")
-                elif event.key == pygame.K_g:
+                elif s == pygame.KSCAN_T:
+                    do_test()
+                elif s == pygame.KSCAN_G:
                     ed.show_grid = not ed.show_grid
-                elif event.key == pygame.K_h:
+                elif s == pygame.KSCAN_H:
                     ed.show_hitboxes = not ed.show_hitboxes
-                elif event.key in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS):
+                elif s in (pygame.KSCAN_EQUALS, pygame.KSCAN_KP_PLUS):
                     ed.zoom = min(2.0, ed.zoom + 0.1)
-                elif event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
+                elif s in (pygame.KSCAN_MINUS, pygame.KSCAN_KP_MINUS):
                     ed.zoom = max(0.4, ed.zoom - 0.1)
-                elif event.key == pygame.K_LEFTBRACKET:
+                elif s == pygame.KSCAN_LEFTBRACKET:
                     ed.brush = max(1, ed.brush - 1)
-                elif event.key == pygame.K_RIGHTBRACKET:
+                elif s == pygame.KSCAN_RIGHTBRACKET:
                     ed.brush = min(8, ed.brush + 1)
-                elif event.key == pygame.K_PERIOD:
+                elif s == pygame.KSCAN_PERIOD:
                     ed.resize_width(5)
-                elif event.key == pygame.K_COMMA:
+                elif s == pygame.KSCAN_COMMA:
                     ed.resize_width(-5)
-                elif event.key == pygame.K_PAGEUP:
+                elif s == pygame.KSCAN_PAGEUP:
                     ed.resize_height(2)
-                elif event.key == pygame.K_PAGEDOWN:
+                elif s == pygame.KSCAN_PAGEDOWN:
                     ed.resize_height(-2)
             elif event.type == pygame.MOUSEWHEEL:
                 ed.cycle_asset(1 if event.y > 0 else -1)
             elif event.type == pygame.MOUSEBUTTONDOWN:
-                mx, my = event.pos
-                if ed.canvas.collidepoint(mx, my):
-                    if event.button == 1:
-                        ed.place(mx, my)
-                    elif event.button == 3:
-                        ed.erase(mx, my)
+                if ed.on_mouse_down(event.pos, event.button) == "test":
+                    do_test()
 
-        # перетаскивание ЛКМ для рисования тайлов
+        # перетаскивание мыши: рисование тайлов / стирание ластиком (вне UI)
         buttons = pygame.mouse.get_pressed(3)
         mx, my = pygame.mouse.get_pos()
-        if ed.canvas.collidepoint(mx, my) and ed.mode in ("tiles",):
-            if buttons[0]:
+        menus_open = ed.dropdown_open or ed.load_open
+        if not menus_open and ed.canvas.collidepoint(mx, my):
+            if buttons[0] and ed.eraser:
+                ed.erase(mx, my)
+            elif buttons[0] and ed.mode == "tiles":
                 ed.place(mx, my)
             elif buttons[2]:
                 ed.erase(mx, my)
 
-        # камера: WASD/стрелки
-        keys = pygame.key.get_pressed()
+        # камера: WASD/стрелки (scancode — любая раскладка)
         pan = 360 * dt / ed.zoom
-        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
+        if ed._held(*SC_CAM_LEFT):
             ed.cam_x -= pan
-        if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
+        if ed._held(*SC_CAM_RIGHT):
             ed.cam_x += pan
-        if keys[pygame.K_w] or keys[pygame.K_UP]:
+        if ed._held(*SC_CAM_UP):
             ed.cam_y -= pan
-        if keys[pygame.K_s] or keys[pygame.K_DOWN]:
+        if ed._held(*SC_CAM_DOWN):
             ed.cam_y += pan
         ed.cam_x = max(-200, min(ed.cam_x, ed.level["width_tiles"] * ed.tile_size))
         ed.cam_y = max(-200, min(ed.cam_y, ed.level["height_tiles"] * ed.tile_size))
@@ -395,6 +660,7 @@ def _playtest(ed: LevelEditor) -> None:
 
 def _draw_editor(screen, ed: LevelEditor, font, font_small, tile_surface) -> None:
     screen.fill(BG)
+    ed.ui = {}
     ts = ed.tile_size
     am = ed.assets
 
@@ -468,6 +734,30 @@ def _draw_editor(screen, ed: LevelEditor, font, font_small, tile_surface) -> Non
         frames = am.enemy_frames(en.get("asset_id", "slime"))
         screen.blit(am.scaled(frames[0], (size, size)), (sx, sy))
 
+    # пилы: маршрут + пила в начальной точке
+    saw_spr = am.obstacle("saw")
+    for sw in ed.level.get("saws", []):
+        ax, ay = ed.world_to_screen(sw["x1"], sw["y1"])
+        bx, by = ed.world_to_screen(sw["x2"], sw["y2"])
+        pygame.draw.line(screen, (255, 120, 120), (ax, ay), (bx, by), 2)
+        pygame.draw.circle(screen, (120, 200, 255), (bx, by), 4)  # конец
+        d = int(sw.get("r", 26) * 2 * ed.zoom)
+        spr = am.scaled(saw_spr, (max(6, d), max(6, d)))
+        # начало маршрута зависит от направления (phase)
+        start = (bx, by) if sw.get("phase", 0) else (ax, ay)
+        screen.blit(spr, (start[0] - d // 2, start[1] - d // 2))
+        if ed.show_hitboxes:
+            pygame.draw.circle(screen, (255, 0, 0), start, int(sw.get("r", 26) * ed.zoom), 1)
+
+    # черновик пилы (ждём вторую точку)
+    if ed.saw_draft is not None:
+        dx, dy = ed.world_to_screen(*ed.saw_draft)
+        mxp, myp = pygame.mouse.get_pos()
+        pygame.draw.line(screen, (255, 180, 90), (dx, dy), (mxp, myp), 1)
+        d = int(ed.saw_r * 2 * ed.zoom)
+        spr = am.scaled(saw_spr, (max(6, d), max(6, d)))
+        screen.blit(spr, (dx - d // 2, dy - d // 2))
+
     # старт игрока и конец уровня
     psx, psy = ed.world_to_screen(ed.level["player"]["start_x"], ed.level["player"]["start_y"])
     pygame.draw.rect(screen, (90, 200, 255), (psx - 6, psy - 14, 14, 18), 2)
@@ -476,25 +766,28 @@ def _draw_editor(screen, ed: LevelEditor, font, font_small, tile_surface) -> Non
     screen.blit(am.scaled(am.item("flag"), (size, int(size * 1.6))), (lex, ley - size))
     screen.blit(font_small.render("END", True, (120, 255, 150)), (lex, ley - size - 16))
 
-    # курсор-подсветка
+    # курсор-подсветка (красный для ластика)
     mx, my = pygame.mouse.get_pos()
     if ed.canvas.collidepoint(mx, my):
         cx, cy = ed.cell_at(mx, my)
         hsx, hsy = ed.world_to_screen(cx * ts, cy * ts)
-        pygame.draw.rect(screen, ACCENT, (hsx, hsy, size, size), 2)
+        cur_col = (255, 90, 90) if ed.eraser else ACCENT
+        pygame.draw.rect(screen, cur_col, (hsx, hsy, size, size), 2)
 
     screen.set_clip(prev_clip)
 
     # --- палитра слева ---
-    pygame.draw.rect(screen, PANEL, (0, TOOLBAR_H, PALETTE_W, EDITOR_H - TOOLBAR_H))
+    pygame.draw.rect(screen, PANEL, (0, TOOLBAR_H, PALETTE_W, ed.height - TOOLBAR_H))
     y = TOOLBAR_H + 10
     cat = ed.mode if ed.mode in ed.sel else None
     title = f"Палитра: {ed.mode}"
     screen.blit(font.render(title, True, TEXT), (10, y))
     y += 26
     ids = ed._cat_ids()
+    ed.palette_rects = []
     for i, aid in enumerate(ids):
         rect = pygame.Rect(10, y, PALETTE_W - 20, 36)
+        ed.palette_rects.append((rect, i))
         sel = cat and i == ed.sel.get(cat, 0)
         pygame.draw.rect(screen, PANEL_HI if sel else (52, 58, 76), rect, border_radius=4)
         # превью
@@ -517,31 +810,140 @@ def _draw_editor(screen, ed: LevelEditor, font, font_small, tile_surface) -> Non
             pass
         screen.blit(font_small.render(aid, True, TEXT), (rect.x + 38, rect.y + 10))
         y += 42
-        if y > EDITOR_H - 120:
+        if y > ed.height - 200:
             break
 
+    # --- настройки пилы (когда выбран инструмент «saw») ---
+    if ed.is_saw_tool():
+        _draw_saw_settings(screen, ed, font, font_small, y + 6)
+
     # подсказка режимов
-    hy = EDITOR_H - 96
+    hy = ed.height - 78
     for line in [
-        "Колесо — сменить ассет",
+        "ЛКМ/Ластик — ставить/стирать",
         "[ ] кисть  + - зум  G сетка  H хитб.",
-        ". , ширина  PgUp/PgDn высота",
-        "Ctrl+S save  Ctrl+O load  T тест",
+        "Ctrl+Z/Y — отмена/повтор  T тест",
     ]:
         screen.blit(font_small.render(line, True, TEXT_DIM), (10, hy))
         hy += 18
 
-    # --- верхняя панель ---
-    pygame.draw.rect(screen, (24, 28, 38), (0, 0, EDITOR_W, TOOLBAR_H))
+    # --- верхняя панель с кликабельными кнопками ---
+    pygame.draw.rect(screen, (24, 28, 38), (0, 0, ed.width, TOOLBAR_H))
+
+    def button(name, label, x, w, active=False):
+        rect = pygame.Rect(x, 6, w, 26)
+        hover = rect.collidepoint(pygame.mouse.get_pos())
+        bg = ACCENT if active else (PANEL_HI if hover else PANEL)
+        pygame.draw.rect(screen, bg, rect, border_radius=6)
+        pygame.draw.rect(screen, (90, 100, 130), rect, 1, border_radius=6)
+        fg = (20, 24, 32) if active else TEXT
+        lab = font_small.render(label, True, fg)
+        screen.blit(lab, (rect.centerx - lab.get_width() // 2, rect.centery - lab.get_height() // 2))
+        ed.ui[name] = rect
+        return rect.right
+
+    x = 10
+    x = button("save", "Save", x, 52) + 5
+    x = button("load", "Load v", x, 58, active=ed.load_open) + 5
+    x = button("test", "Test", x, 50) + 12
+    mode_rect = pygame.Rect(x, 6, 150, 26)
+    hover = mode_rect.collidepoint(pygame.mouse.get_pos())
+    pygame.draw.rect(screen, PANEL_HI if (hover or ed.dropdown_open) else PANEL, mode_rect, border_radius=6)
+    pygame.draw.rect(screen, (90, 100, 130), mode_rect, 1, border_radius=6)
+    mlab = font_small.render(f"Режим: {MODE_LABELS.get(ed.mode, ed.mode)} v", True, TEXT)
+    screen.blit(mlab, (mode_rect.x + 8, mode_rect.centery - mlab.get_height() // 2))
+    ed.ui["mode"] = mode_rect
+    x = mode_rect.right + 12
+    x = button("eraser", "Ластик", x, 64, active=ed.eraser) + 5
+    x = button("undo", "Undo", x, 50) + 5
+    x = button("redo", "Redo", x, 50) + 12
+    x = button("grow_up", "Выше +", x, 64) + 5
+    x = button("grow_down", "Ниже +", x, 64) + 5
+
     info = (
-        f"[{MODE_LABELS.get(ed.mode, ed.mode)}]  "
         f"кисть:{ed.brush}  зум:{ed.zoom:.1f}  "
         f"размер:{ed.level['width_tiles']}x{ed.level['height_tiles']}  "
         f"имя:{ed.level.get('name','')}"
     )
-    screen.blit(font.render(info, True, TEXT), (10, 10))
+    screen.blit(font_small.render(info, True, TEXT_DIM), (10, 38))
     msg = font_small.render(ed.message, True, ACCENT)
-    screen.blit(msg, (EDITOR_W - msg.get_width() - 10, 13))
+    screen.blit(msg, (ed.width - msg.get_width() - 10, 38))
+
+    # выпадающий список режимов (рисуем поверх всего)
+    ed.dropdown_rects = []
+    if ed.dropdown_open:
+        dx, dy = mode_rect.x, mode_rect.bottom + 2
+        dw, dh = mode_rect.width, 24
+        for m in MODE_ORDER:
+            r = pygame.Rect(dx, dy, dw, dh)
+            ed.dropdown_rects.append((r, m))
+            hov = r.collidepoint(pygame.mouse.get_pos())
+            pygame.draw.rect(screen, PANEL_HI if hov else PANEL, r)
+            pygame.draw.rect(screen, (90, 100, 130), r, 1)
+            active = m == ed.mode
+            col = ACCENT if active else TEXT
+            screen.blit(font_small.render(MODE_LABELS.get(m, m), True, col), (r.x + 8, r.y + 5))
+            dy += dh
+
+    # выпадающий список файлов для загрузки
+    ed.load_rects = []
+    if ed.load_open:
+        files = ed._load_files()
+        lr = ed.ui["load"]
+        dx, dy, dw, dh = lr.x, lr.bottom + 2, 220, 24
+        if not files:
+            r = pygame.Rect(dx, dy, dw, dh)
+            pygame.draw.rect(screen, PANEL, r)
+            pygame.draw.rect(screen, (90, 100, 130), r, 1)
+            screen.blit(font_small.render("нет файлов в levels/", True, TEXT_DIM), (r.x + 8, r.y + 5))
+        for p in files:
+            r = pygame.Rect(dx, dy, dw, dh)
+            ed.load_rects.append((r, p))
+            hov = r.collidepoint(pygame.mouse.get_pos())
+            pygame.draw.rect(screen, PANEL_HI if hov else PANEL, r)
+            pygame.draw.rect(screen, (90, 100, 130), r, 1)
+            screen.blit(font_small.render(p.name, True, TEXT), (r.x + 8, r.y + 5))
+            dy += dh
+
+
+def _draw_saw_settings(screen, ed: LevelEditor, font, font_small, y: int) -> None:
+    """Панель параметров пилы: размер, период (скорость), направление."""
+    box = pygame.Rect(6, y, PALETTE_W - 12, 132)
+    pygame.draw.rect(screen, (34, 40, 56), box, border_radius=6)
+    pygame.draw.rect(screen, (90, 100, 130), box, 1, border_radius=6)
+    screen.blit(font.render("Пила", True, ACCENT), (box.x + 8, box.y + 6))
+    mp = pygame.mouse.get_pos()
+
+    def step_row(name_dec, name_inc, label, value, ry):
+        screen.blit(font_small.render(label, True, TEXT), (box.x + 8, ry))
+        dec = pygame.Rect(box.right - 86, ry - 2, 22, 20)
+        inc = pygame.Rect(box.right - 30, ry - 2, 22, 20)
+        for r, txt, nm in ((dec, "-", name_dec), (inc, "+", name_inc)):
+            hov = r.collidepoint(mp)
+            pygame.draw.rect(screen, PANEL_HI if hov else PANEL, r, border_radius=4)
+            pygame.draw.rect(screen, (90, 100, 130), r, 1, border_radius=4)
+            t = font_small.render(txt, True, TEXT)
+            screen.blit(t, (r.centerx - t.get_width() // 2, r.centery - t.get_height() // 2))
+            ed.ui[nm] = r
+        val = font_small.render(value, True, ACCENT)
+        screen.blit(val, (box.right - 64, ry))
+
+    step_row("saw_r_dec", "saw_r_inc", "Размер", f"{int(ed.saw_r)}", box.y + 32)
+    step_row("saw_t_dec", "saw_t_inc", "Период", f"{ed.saw_period:.1f}с", box.y + 58)
+
+    # направление
+    screen.blit(font_small.render("Направл.", True, TEXT), (box.x + 8, box.y + 84))
+    dr = pygame.Rect(box.right - 86, box.y + 82, 78, 20)
+    hov = dr.collidepoint(mp)
+    pygame.draw.rect(screen, PANEL_HI if hov else PANEL, dr, border_radius=4)
+    pygame.draw.rect(screen, (90, 100, 130), dr, 1, border_radius=4)
+    dir_txt = "назад" if ed.saw_phase else "вперёд"
+    t = font_small.render(dir_txt, True, TEXT)
+    screen.blit(t, (dr.centerx - t.get_width() // 2, dr.centery - t.get_height() // 2))
+    ed.ui["saw_dir"] = dr
+
+    hint = "ЛКМ: старт → конец" if ed.saw_draft is None else "ЛКМ: задай конец"
+    screen.blit(font_small.render(hint, True, TEXT_DIM), (box.x + 8, box.y + 108))
 
 
 if __name__ == "__main__":
