@@ -693,6 +693,7 @@ class PlatformerGame:
         self.selected_index = 0
         self.completed: set[int] = set()
         self.near_button = False
+        self.menu_items: list[dict] = []
         self.level: LevelData | None = None
         self.player = Player(0, 0)
         self.camera = Camera(W)
@@ -741,6 +742,63 @@ class PlatformerGame:
         self.level_time = 0.0
         self.projectiles = []
 
+    # ---------- меню выбора уровня (встроенные + JSON + редактор) ----------
+    def _refresh_menu_items(self) -> None:
+        items: list[dict] = []
+        for i in range(len(LEVELS)):
+            items.append({"kind": "builtin", "index": i, "label": LEVELS[i]().name})
+        # пользовательские уровни из levels/*.json
+        try:
+            from src.levels import level_io
+
+            for p in sorted(level_io.LEVELS_DIR.glob("*.json")):
+                if p.name.startswith("_"):
+                    continue  # служебные (например, _editor_test_level.json)
+                items.append({"kind": "json", "path": str(p), "label": f"[JSON] {p.stem}"})
+        except Exception:  # noqa: BLE001
+            pass
+        items.append({"kind": "editor", "label": "[ Открыть редактор уровней ]"})
+        self.menu_items = items
+        if self.selected_index >= len(items):
+            self.selected_index = len(items) - 1
+
+    def _activate_menu_item(self, idx: int) -> None:
+        if not self.menu_items:
+            self._refresh_menu_items()
+        if not (0 <= idx < len(self.menu_items)):
+            return
+        item = self.menu_items[idx]
+        if item["kind"] == "builtin":
+            self.load_level(item["index"])
+        elif item["kind"] == "json":
+            self._play_json(item["path"])
+        elif item["kind"] == "editor":
+            self.launch_editor()
+
+    def _play_json(self, path: str) -> None:
+        from src.levels import level_io
+
+        try:
+            level = level_io.dict_to_leveldata(level_io.load_level_file(path))
+        except ValueError as e:
+            print(f"[level] Ошибка загрузки уровня: {e}")
+            return
+        self.play_level_data(level)
+
+    def launch_editor(self) -> None:
+        """Открыть встроенный редактор и вернуться в меню по выходу из него."""
+        try:
+            from src.editor.level_editor import run_editor
+        except Exception as e:  # noqa: BLE001
+            print(f"[editor] Редактор недоступен: {e}")
+            return
+        run_editor()
+        # редактор менял режим дисплея — восстановим окно игры
+        self.screen = pygame.display.set_mode((W, H))
+        pygame.display.set_caption("Платформер")
+        self.state = GameState.LEVEL_SELECT
+        self._refresh_menu_items()
+
     def run(self, *, quit_pygame_on_exit: bool = True) -> None:
         while True:
             dt = self.clock.tick(FPS) / 1000.0
@@ -765,17 +823,21 @@ class PlatformerGame:
                     self.state = GameState.LEVEL_SELECT
                     continue
                 if self.state == GameState.LEVEL_SELECT:
+                    self._refresh_menu_items()
+                    n = len(self.menu_items)
                     if event.key in (pygame.K_UP, pygame.K_w):
-                        self.selected_index = (self.selected_index - 1) % len(LEVELS)
+                        self.selected_index = (self.selected_index - 1) % n
                     elif event.key in (pygame.K_DOWN, pygame.K_s):
-                        self.selected_index = (self.selected_index + 1) % len(LEVELS)
+                        self.selected_index = (self.selected_index + 1) % n
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                        self.load_level(self.selected_index)
+                        self._activate_menu_item(self.selected_index)
+                    elif event.key == pygame.K_e:
+                        self.launch_editor()
                     elif pygame.K_1 <= event.key <= pygame.K_9:
                         idx = event.key - pygame.K_1
-                        if idx < len(LEVELS):
+                        if idx < n:
                             self.selected_index = idx
-                            self.load_level(idx)
+                            self._activate_menu_item(idx)
                 elif self.state in (GameState.LEVEL_COMPLETE, GameState.WIN, GameState.DEAD):
                     if event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_r):
                         if self.state == GameState.DEAD:
@@ -1375,35 +1437,47 @@ class PlatformerGame:
             pygame.draw.line(self.screen, c, (0, i), (W, i))
 
         title = self.font_big.render("Выбор уровня", True, UI)
-        self.screen.blit(title, (W // 2 - title.get_width() // 2, 50))
+        self.screen.blit(title, (W // 2 - title.get_width() // 2, 36))
 
-        names = [LEVELS[i]().name for i in range(len(LEVELS))]
-        y = 150
-        for i, nm in enumerate(names):
+        if not self.menu_items:
+            self._refresh_menu_items()
+
+        # компактный шаг, чтобы помещался длинный список (уровни + JSON + редактор)
+        n = len(self.menu_items)
+        step = 40 if n <= 9 else 32
+        y = 110
+        for i, item in enumerate(self.menu_items):
             selected = i == self.selected_index
-            done = "  ✓" if i in self.completed else ""
-            label = f"{i + 1}. {nm}{done}"
-            color = (255, 240, 140) if selected else UI_DIM
-            surf = self.font.render(label, True, color)
+            label = item["label"]
+            if item["kind"] == "builtin" and item["index"] in self.completed:
+                label += "  ✓"
+            prefix = f"{i + 1}. " if i < 9 else "   "
+            if item["kind"] == "editor":
+                base_color = (140, 255, 180)
+            elif item["kind"] == "json":
+                base_color = (180, 210, 255)
+            else:
+                base_color = UI_DIM
+            color = (255, 240, 140) if selected else base_color
+            surf = self.font.render(prefix + label, True, color)
             x = W // 2 - surf.get_width() // 2
             if selected:
-                box = pygame.Rect(x - 24, y - 6, surf.get_width() + 48, 34)
+                box = pygame.Rect(x - 24, y - 4, surf.get_width() + 48, step - 4)
                 pygame.draw.rect(self.screen, (255, 255, 255), box, 2, border_radius=6)
                 marker = self.font.render(">", True, (255, 240, 140))
                 self.screen.blit(marker, (x - 24, y))
             self.screen.blit(surf, (x, y))
-            y += 48
+            y += step
 
         hints = [
-            "↑ ↓ / W S — выбор    Enter / Space — играть    1–9 — быстрый выбор",
-            "Управление в игре: ← → / A D, прыжок Space/W/↑, портал — войти, кнопка — F",
-            "Esc — выход в главное меню",
+            "↑ ↓ / W S — выбор    Enter — играть/открыть    1–9 — быстрый выбор",
+            "E — редактор уровней    Esc — выход в главное меню",
         ]
-        hy = y + 30
+        hy = max(y + 16, H - 64)
         for line in hints:
             surf = self.font_small.render(line, True, (225, 230, 245))
             self.screen.blit(surf, (W // 2 - surf.get_width() // 2, hy))
-            hy += 26
+            hy += 24
 
     def _blit_tiled(self, sprite: pygame.Surface, r: pygame.Rect) -> None:
         """Замостить прямоугольник r спрайтом-тайлом по сетке (визуал)."""
