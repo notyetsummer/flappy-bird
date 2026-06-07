@@ -1,0 +1,36 @@
+[
+  {
+    "name": "Generated Pixel Placeholder Pack",
+    "source_url": "local:scripts/setup_assets.py",
+    "author": "project (procedural)",
+    "license": "CC0",
+    "status": "integrated",
+    "notes": "Base sprites generated in-code; safe to use and redistribute.",
+    "files": [
+      "player/idle_0.png",
+      "player/idle_1.png",
+      "player/run_0.png",
+      "player/run_1.png",
+      "player/run_2.png",
+      "player/run_3.png",
+      "player/jump.png",
+      "player/fall.png",
+      "tiles/ground.png",
+      "tiles/grass.png",
+      "tiles/stone.png",
+      "tiles/dirt.png",
+      "items/coin_0.png",
+      "items/coin_1.png",
+      "items/coin_2.png",
+      "items/coin_3.png",
+      "obstacles/spikes.png",
+      "enemies/slime_idle_0.png",
+      "enemies/slime_idle_1.png",
+      "items/flag.png",
+      "backgrounds/default.png",
+      "ui/heart_full.png",
+      "ui/heart_empty.png",
+      "ui/missing.png"
+    ]
+  }
+]

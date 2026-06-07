@@ -18,6 +18,15 @@ W, H = 960, 540
 FPS = 60
 DT = 1.0 / FPS
 
+# Debug: отрисовка хитбоксов поверх спрайтов (по умолчанию выключено)
+DEBUG_DRAW_HITBOXES = False
+
+# Слой ассетов подключается лениво и безопасно: если его нет — рисуем примитивы.
+try:
+    from src.assets.asset_registry import get_asset_manager as _get_asset_manager
+except Exception:  # noqa: BLE001 — отсутствие ассет-слоя не должно ронять игру
+    _get_asset_manager = None  # type: ignore[assignment]
+
 # --- цвета ---
 SKY = (135, 206, 235)
 SKY2 = (90, 60, 110)
@@ -82,6 +91,7 @@ class RectObj:
     y: float
     w: float
     h: float
+    tile_id: str = "grass"  # какой тайл/спрайт рисовать (визуал, не физика)
 
     @property
     def rect(self) -> pygame.Rect:
@@ -200,6 +210,26 @@ class Projectile:
 
 
 @dataclass
+class Enemy:
+    """Простой враг (слайм): патрулирует по X между patrol_left/right, летален."""
+
+    x: float
+    y: float
+    enemy_type: str = "slime"
+    asset_id: str = "slime"
+    patrol_left: float = 0.0
+    patrol_right: float = 0.0
+    speed: float = 1.4
+    w: float = 32.0
+    h: float = 28.0
+    direction: int = 1
+
+    @property
+    def rect(self) -> pygame.Rect:
+        return pygame.Rect(int(self.x), int(self.y), int(self.w), int(self.h))
+
+
+@dataclass
 class LevelData:
     name: str
     world_w: int
@@ -214,11 +244,13 @@ class LevelData:
     powerups: list[PowerUp] = field(default_factory=list)
     saws: list[Saw] = field(default_factory=list)
     turrets: list[Turret] = field(default_factory=list)
+    enemies: list[Enemy] = field(default_factory=list)
     goal: RectObj | None = None
     bg_top: tuple[int, int, int] = SKY
     bg_bottom: tuple[int, int, int] = GROUND
     plat_color: tuple[int, int, int] = PLATFORM
     plat_top_color: tuple[int, int, int] = PLATFORM_TOP
+    background: str | None = None  # id фонового спрайта (если есть ассеты)
 
 
 def level_1() -> LevelData:
@@ -609,6 +641,11 @@ class Player:
         self.gravity_dir = 1  # 1 = вниз (обычно), -1 = вверх (ходьба по потолку)
         self.flip_held = False
         self.low_grav_timer = 0.0  # >0 — гравитация уменьшена вдвое
+        # визуальное состояние анимации (физику не затрагивает)
+        self.anim_state = "idle"
+        self.frame_index = 0
+        self.anim_timer = 0.0
+        self.facing_right = True
 
     @property
     def rect(self) -> pygame.Rect:
@@ -665,16 +702,39 @@ class PlatformerGame:
         self.death_timer = 0.0
         self.level_time = 0.0
         self.projectiles: list[Projectile] = []
+        self.anim_clock = 0.0
+        self._external_level: LevelData | None = None
+        # слой ассетов (может отсутствовать → рисуем примитивы)
+        self.assets = None
+        if _get_asset_manager is not None:
+            try:
+                self.assets = _get_asset_manager()
+            except Exception:  # noqa: BLE001
+                self.assets = None
+
+    def _has_sprites(self) -> bool:
+        return self.assets is not None and getattr(self.assets, "available", False)
 
     def load_level(self, index: int) -> None:
         self.level_index = index
-        self.level = LEVELS[index]()
+        self._start_level(LEVELS[index]())
+
+    def play_level_data(self, level: LevelData) -> None:
+        """Запустить произвольный LevelData (например, из JSON или редактора)."""
+        self.level_index = -1
+        self._external_level = level
+        self._start_level(level)
+
+    def _start_level(self, level: LevelData) -> None:
+        self.level = level
         self.player.reset(*self.level.spawn)
         self.camera = Camera(self.level.world_w)
         self.coins_total = sum(1 for c in self.level.coins if not c.collected)
         self.coins_collected = 0
         for coin in self.level.coins:
             coin.collected = False
+        for en in self.level.enemies:
+            en.direction = 1
         self.state = GameState.PLAYING
         self.complete_timer = 0.0
         self.death_timer = 0.0
@@ -719,7 +779,10 @@ class PlatformerGame:
                 elif self.state in (GameState.LEVEL_COMPLETE, GameState.WIN, GameState.DEAD):
                     if event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_r):
                         if self.state == GameState.DEAD:
-                            self.load_level(self.level_index)
+                            if self.level_index < 0 and self._external_level is not None:
+                                self.play_level_data(self._external_level)
+                            else:
+                                self.load_level(self.level_index)
                         else:
                             # после прохождения уровня — обратно в список уровней
                             self.selected_index = min(
@@ -902,6 +965,23 @@ class PlatformerGame:
                 self.kill_player()
                 return
 
+        # враги: патруль по X между границами + летальный контакт
+        for en in self.level.enemies:
+            if en.patrol_right > en.patrol_left:
+                en.x += en.speed * en.direction
+                if en.x <= en.patrol_left:
+                    en.x = en.patrol_left
+                    en.direction = 1
+                elif en.x + en.w >= en.patrol_right:
+                    en.x = en.patrol_right - en.w
+                    en.direction = -1
+            if pr.colliderect(en.rect):
+                self.kill_player()
+                return
+
+        # анимация игрока (визуал)
+        self._update_player_anim(dt)
+
         # цель
         if self.level.goal and pr.colliderect(self.level.goal.rect):
             self.completed.add(self.level_index)
@@ -955,45 +1035,95 @@ class PlatformerGame:
         self.state = GameState.DEAD
         self.death_timer = 0.0
 
+    def _update_player_anim(self, dt: float) -> None:
+        p = self.player
+        if abs(p.vx) > 0.3:
+            p.facing_right = p.vx > 0
+        # состояние по физике (учитываем направление гравитации для падения)
+        falling = p.vy * p.gravity_dir > 0.5
+        rising = p.vy * p.gravity_dir < -0.5
+        if not p.on_ground and (rising or falling):
+            new_state = "jump" if rising else "fall"
+        elif abs(p.vx) > 0.6:
+            new_state = "run"
+        else:
+            new_state = "idle"
+        if new_state != p.anim_state:
+            p.anim_state = new_state
+            p.frame_index = 0
+            p.anim_timer = 0.0
+        p.anim_timer += dt
+        speed = 0.10 if new_state == "run" else 0.25
+        if p.anim_timer >= speed:
+            p.anim_timer -= speed
+            p.frame_index += 1
+
     def draw(self) -> None:
         if self.state == GameState.LEVEL_SELECT:
             self.draw_level_select()
             return
 
         assert self.level is not None
-        # фон с градиентом (полосами)
-        for i in range(H):
-            t = i / H
-            c = tuple(
-                int(self.level.bg_top[j] * (1 - t) + self.level.bg_bottom[j] * t)
-                for j in range(3)
-            )
-            pygame.draw.line(self.screen, c, (0, i), (W, i))
+        # фон: спрайт (если есть) либо градиент-полосы
+        bg_drawn = False
+        if self._has_sprites() and self.level.background:
+            try:
+                bg = self.assets.background(self.level.background)
+                bg = self.assets.scaled(bg, (W, H))
+                self.screen.blit(bg, (0, 0))
+                bg_drawn = True
+            except Exception:  # noqa: BLE001
+                bg_drawn = False
+        if not bg_drawn:
+            for i in range(H):
+                t = i / H
+                c = tuple(
+                    int(self.level.bg_top[j] * (1 - t) + self.level.bg_bottom[j] * t)
+                    for j in range(3)
+                )
+                pygame.draw.line(self.screen, c, (0, i), (W, i))
 
         cam_x = int(self.camera.x)
+        use_sprites = self._has_sprites()
 
-        # платформы
+        # платформы: тайлим спрайт по сетке, иначе прямоугольник
         for plat in self.level.platforms:
             r = self.camera.apply(plat.rect)
             if r.right < 0 or r.left > W:
                 continue
-            pygame.draw.rect(self.screen, self.level.plat_color, r)
-            top = pygame.Rect(r.x, r.y, r.w, 4)
-            pygame.draw.rect(self.screen, self.level.plat_top_color, top)
+            if use_sprites:
+                self._blit_tiled(self.assets.tile(plat.tile_id), r)
+            else:
+                pygame.draw.rect(self.screen, self.level.plat_color, r)
+                top = pygame.Rect(r.x, r.y, r.w, 4)
+                pygame.draw.rect(self.screen, self.level.plat_top_color, top)
+            if DEBUG_DRAW_HITBOXES:
+                pygame.draw.rect(self.screen, (255, 0, 0), r, 1)
 
-        # шипы (треугольники остриём вверх — на полу)
+        # шипы остриём вверх — на полу
         for spike in self.level.spikes:
             r = self.camera.apply(spike.rect)
             if r.right < 0 or r.left > W:
                 continue
-            self.draw_spikes(r)
+            if use_sprites:
+                self._blit_tiled(self.assets.obstacle("spikes"), r)
+            else:
+                self.draw_spikes(r)
+            if DEBUG_DRAW_HITBOXES:
+                pygame.draw.rect(self.screen, (255, 0, 0), r, 1)
 
         # шипы остриём вниз — на потолке
         for spike in self.level.spikes_down:
             r = self.camera.apply(spike.rect)
             if r.right < 0 or r.left > W:
                 continue
-            self.draw_spikes(r, down=True)
+            if use_sprites:
+                spr = pygame.transform.flip(self.assets.obstacle("spikes"), False, True)
+                self._blit_tiled(spr, r)
+            else:
+                self.draw_spikes(r, down=True)
+            if DEBUG_DRAW_HITBOXES:
+                pygame.draw.rect(self.screen, (255, 0, 0), r, 1)
 
         # ворота
         for gate in self.level.gates:
@@ -1031,8 +1161,9 @@ class PlatformerGame:
             pygame.draw.ellipse(self.screen, PORTAL, r.inflate(pulse, pulse))
             pygame.draw.ellipse(self.screen, PORTAL_CORE, r.inflate(-r.w // 3, -r.h // 3))
 
-        # монеты
+        # монеты: анимированный спрайт или круг
         t = pygame.time.get_ticks() / 200.0
+        coin_frames = self.assets.coin_frames() if use_sprites else None
         for coin in self.level.coins:
             if coin.collected:
                 continue
@@ -1041,10 +1172,20 @@ class PlatformerGame:
             if sx < -20 or sx > W + 20:
                 continue
             bob = math.sin(t + coin.x * 0.01) * 3
-            pygame.draw.circle(self.screen, COIN, (sx, int(sy + bob)), int(coin.radius))
-            pygame.draw.circle(
-                self.screen, COIN_SHINE, (sx - 3, int(sy + bob - 3)), 4
-            )
+            if coin_frames:
+                fr = coin_frames[int(self.level_time * 8) % len(coin_frames)]
+                size = int(coin.radius * 2)
+                spr = self.assets.scaled(fr, (size, size))
+                self.screen.blit(spr, (sx - size // 2, int(sy + bob) - size // 2))
+            else:
+                pygame.draw.circle(self.screen, COIN, (sx, int(sy + bob)), int(coin.radius))
+                pygame.draw.circle(
+                    self.screen, COIN_SHINE, (sx - 3, int(sy + bob - 3)), 4
+                )
+            if DEBUG_DRAW_HITBOXES:
+                cr = pygame.Rect(0, 0, int(coin.radius * 2), int(coin.radius * 2))
+                cr.center = (sx, int(sy + bob))
+                pygame.draw.rect(self.screen, (255, 0, 0), cr, 1)
 
         # паверапы (низкая гравитация): пульсирующий орб со стрелкой вниз
         for pu in self.level.powerups:
@@ -1101,26 +1242,72 @@ class PlatformerGame:
                 pygame.draw.line(self.screen, SAW, (sx, sy), (tx, ty), 3)
             pygame.draw.circle(self.screen, SAW_CORE, (sx, sy), max(3, r // 3))
 
-        # цель
+        # враги (слаймы): спрайт или прямоугольник
+        for en in self.level.enemies:
+            er = self.camera.apply(en.rect)
+            if er.right < 0 or er.left > W:
+                continue
+            if use_sprites:
+                frames = self.assets.enemy_frames(en.asset_id, "idle")
+                fr = frames[int(self.level_time * 4) % len(frames)]
+                spr = self.assets.scaled(fr, (er.w, er.h))
+                if en.direction < 0:
+                    spr = pygame.transform.flip(spr, True, False)
+                self.screen.blit(spr, er.topleft)
+            else:
+                pygame.draw.rect(self.screen, (90, 200, 110), er, border_radius=6)
+                pygame.draw.rect(self.screen, (60, 160, 80), er, 2, border_radius=6)
+            if DEBUG_DRAW_HITBOXES:
+                pygame.draw.rect(self.screen, (255, 0, 0), er, 1)
+
+        # цель: флаг-спрайт или зелёный прямоугольник EXIT
         if self.level.goal:
             gr = self.camera.apply(self.level.goal.rect)
-            pygame.draw.rect(self.screen, GOAL, gr, border_radius=4)
-            pygame.draw.rect(self.screen, (60, 200, 100), gr, 3, border_radius=4)
-            label = self.font_small.render("EXIT", True, (20, 60, 30))
-            self.screen.blit(label, (gr.centerx - label.get_width() // 2, gr.y - 22))
+            flag_drawn = False
+            if use_sprites:
+                try:
+                    spr = self.assets.scaled(self.assets.item("flag"), (gr.w, gr.h))
+                    self.screen.blit(spr, gr.topleft)
+                    flag_drawn = True
+                except Exception:  # noqa: BLE001
+                    flag_drawn = False
+            if not flag_drawn:
+                pygame.draw.rect(self.screen, GOAL, gr, border_radius=4)
+                pygame.draw.rect(self.screen, (60, 200, 100), gr, 3, border_radius=4)
+                label = self.font_small.render("EXIT", True, (20, 60, 30))
+                self.screen.blit(label, (gr.centerx - label.get_width() // 2, gr.y - 22))
+            if DEBUG_DRAW_HITBOXES:
+                pygame.draw.rect(self.screen, (255, 0, 0), gr, 1)
 
-        # игрок (акцент/глаз ориентированы по направлению гравитации)
+        # игрок: спрайт по состоянию анимации, иначе примитив
         gdir = self.player.gravity_dir
         pr = self.camera.apply(self.player.rect)
         if self.player.low_grav_timer > 0:
             aura = pr.inflate(14, 14)
             pygame.draw.ellipse(self.screen, POWERUP, aura, 2)
-        pygame.draw.rect(self.screen, PLAYER_ACCENT, pr.move(0, 4 * gdir))
-        body = pr.inflate(-4, -8)
-        pygame.draw.rect(self.screen, PLAYER, body, border_radius=6)
-        eye_x = body.right - 8 if self.player.facing > 0 else body.left + 4
-        eye_y = body.y + 10 if gdir > 0 else body.bottom - 10
-        pygame.draw.circle(self.screen, UI, (eye_x, eye_y), 4)
+        player_drawn = False
+        if use_sprites:
+            try:
+                frames = self.assets.player_frames(self.player.anim_state)
+                fr = frames[self.player.frame_index % len(frames)]
+                spr = self.assets.scaled(fr, (pr.w + 8, pr.h + 4))
+                if not self.player.facing_right:
+                    spr = pygame.transform.flip(spr, True, False)
+                if gdir < 0:
+                    spr = pygame.transform.flip(spr, False, True)
+                self.screen.blit(spr, (pr.x - 4, pr.y - (0 if gdir > 0 else 4)))
+                player_drawn = True
+            except Exception:  # noqa: BLE001
+                player_drawn = False
+        if not player_drawn:
+            pygame.draw.rect(self.screen, PLAYER_ACCENT, pr.move(0, 4 * gdir))
+            body = pr.inflate(-4, -8)
+            pygame.draw.rect(self.screen, PLAYER, body, border_radius=6)
+            eye_x = body.right - 8 if self.player.facing > 0 else body.left + 4
+            eye_y = body.y + 10 if gdir > 0 else body.bottom - 10
+            pygame.draw.circle(self.screen, UI, (eye_x, eye_y), 4)
+        if DEBUG_DRAW_HITBOXES:
+            pygame.draw.rect(self.screen, (255, 0, 0), pr, 1)
 
         # HUD
         self.draw_hud()
@@ -1218,6 +1405,24 @@ class PlatformerGame:
             self.screen.blit(surf, (W // 2 - surf.get_width() // 2, hy))
             hy += 26
 
+    def _blit_tiled(self, sprite: pygame.Surface, r: pygame.Rect) -> None:
+        """Замостить прямоугольник r спрайтом-тайлом по сетке (визуал)."""
+        assert self.assets is not None
+        step = max(8, min(r.w, r.h)) if (r.w <= 24 or r.h <= 24) else 48
+        # для тонких полос (платформы/шипы) тайлим по короткой стороне
+        tw = th = max(16, min(48, step))
+        tile = self.assets.scaled(sprite, (tw, th))
+        prev_clip = self.screen.get_clip()
+        self.screen.set_clip(r)
+        y = r.y
+        while y < r.bottom:
+            x = r.x
+            while x < r.right:
+                self.screen.blit(tile, (x, y))
+                x += tw
+            y += th
+        self.screen.set_clip(prev_clip)
+
     def draw_spikes(self, r: pygame.Rect, down: bool = False) -> None:
         n = max(1, r.w // 14)
         w = r.w / n
@@ -1258,7 +1463,41 @@ def run_platformer_session(
                 pygame.display.set_caption(restore_caption)
 
 
+def run_level_file(level_path: str) -> None:
+    """Запустить игру сразу в уровне из JSON-файла (--level)."""
+    from src.levels import level_io
+
+    game = PlatformerGame()
+    try:
+        level = level_io.dict_to_leveldata(level_io.load_level_file(level_path))
+        game.play_level_data(level)
+    except ValueError as e:
+        print(f"[level] Ошибка загрузки уровня: {e}")
+        print("[level] Запускаю меню выбора уровней.")
+    game.run()
+
+
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Pygame платформер")
+    parser.add_argument("--editor", action="store_true", help="запустить редактор уровней")
+    parser.add_argument("--level", metavar="PATH", help="запустить уровень из JSON")
+    parser.add_argument("--debug-hitboxes", action="store_true", help="показывать хитбоксы")
+    args = parser.parse_args()
+
+    if args.debug_hitboxes:
+        global DEBUG_DRAW_HITBOXES
+        DEBUG_DRAW_HITBOXES = True
+
+    if args.editor:
+        from src.editor.level_editor import run_editor
+
+        run_editor()
+        return
+    if args.level:
+        run_level_file(args.level)
+        return
     run_platformer_session()
 
 
