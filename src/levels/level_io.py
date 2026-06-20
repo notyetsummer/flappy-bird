@@ -14,6 +14,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from src.assets.asset_registry import DEFAULT_PLAYER_SKIN
+
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 LEVELS_DIR = BASE_DIR / "levels"
 SCREEN_H = 540  # движок скроллит только по X; высота сцены = высоте экрана
@@ -33,7 +35,7 @@ def new_level(name: str = "untitled", width_tiles: int = 60, height_tiles: int =
         "height_tiles": height_tiles,
         "background": "default",
         "player": {"start_x": tile_size * 2, "start_y": SCREEN_H - tile_size - 40,
-                   "asset_set": "default_player"},
+                   "asset_set": DEFAULT_PLAYER_SKIN},
         "level_end": {"x": (width_tiles - 3) * tile_size, "y": SCREEN_H - tile_size - 70,
                       "type": "flag"},
         "tiles": [],
@@ -149,6 +151,7 @@ def dict_to_leveldata(level: dict[str, Any]):
         saws=saws,
         goal=goal,
         background=level.get("background", "default"),
+        player_asset_set=player.get("asset_set", DEFAULT_PLAYER_SKIN),
     )
 
 

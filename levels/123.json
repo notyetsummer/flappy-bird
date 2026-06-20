@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "name": "123",
+  "tile_size": 48,
+  "width_tiles": 60,
+  "height_tiles": 11,
+  "background": "default",
+  "player": {
+    "start_x": 96,
+    "start_y": 452,
+    "asset_set": "pink_monster"
+  },
+  "level_end": {
+    "x": 2736,
+    "y": 422,
+    "type": "flag"
+  },
+  "tiles": [
+    {
+      "x": 0,
+      "y": 9,
+      "tile_id": "grass"
+    },
+    {
+      "x": 0,
+      "y": 10,
+      "tile_id": "grass"
+    },
+    {
+      "x": 1,
+      "y": 10,
+      "tile_id": "grass"
+    },
+    {
+      "x": 2,
+      "y": 10,
+      "tile_id": "grass"
+    },
+    {
+      "x": 3,
+      "y": 10,
+      "tile_id": "grass"
+    },
+    {
+      "x": 3,
+      "y": 9,
+      "tile_id": "grass"
+    },
+    {
+      "x": 3,
+      "y": 8,
+      "tile_id": "grass"
+    },
+    {
+      "x": 2,
+      "y": 8,
+      "tile_id": "grass"
+    },
+    {
+      "x": 2,
+      "y": 7,
+      "tile_id": "grass"
+    },
+    {
+      "x": 1,
+      "y": 7,
+      "tile_id": "grass"
+    },
+    {
+      "x": 1,
+      "y": 8,
+      "tile_id": "grass"
+    },
+    {
+      "x": 0,
+      "y": 8,
+      "tile_id": "grass"
+    }
+  ],
+  "platforms": [],
+  "enemies": [],
+  "items": [],
+  "obstacles": [],
+  "saws": [],
+  "decorations": []
+}

@@ -82,6 +82,15 @@ SC_CAM_RIGHT = (pygame.KSCAN_D, pygame.KSCAN_RIGHT)
 SC_CAM_UP = (pygame.KSCAN_W, pygame.KSCAN_UP)
 SC_CAM_DOWN = (pygame.KSCAN_S, pygame.KSCAN_DOWN)
 
+_BAD_NAME_CHARS = set('/\\:*?"<>|')
+
+
+def _sanitize_name(raw: str) -> str:
+    """Очистить имя для использования в имени файла (без путей/спецсимволов)."""
+    name = "".join(c for c in str(raw) if c not in _BAD_NAME_CHARS).strip()
+    name = name.strip(".")
+    return name[:40]
+
 
 class LevelEditor:
     def __init__(self, level: dict | None = None) -> None:
@@ -115,6 +124,9 @@ class LevelEditor:
         self.held_sc: set[int] = set()
         self.dropdown_open = False
         self.load_open = False
+        # ввод имени карты
+        self.name_editing = False
+        self.name_buffer = ""
         self.ui: dict[str, pygame.Rect] = {}
         self.palette_rects: list[tuple[pygame.Rect, int]] = []
         self.dropdown_rects: list[tuple[pygame.Rect, str]] = []
@@ -157,12 +169,49 @@ class LevelEditor:
     def is_saw_tool(self) -> bool:
         return self.mode == "obstacles" and self.selected_id("obstacles") == "saw"
 
+    # ---------- ввод имени карты ----------
+    def start_name_edit(self) -> None:
+        self.name_editing = True
+        self.name_buffer = str(self.level.get("name", ""))
+        self.held_sc.clear()  # чтобы камера не ехала во время ввода
+        self.message = "Ввод имени: печатай, Enter — ок, Esc — отмена"
+
+    def commit_name(self) -> None:
+        name = _sanitize_name(self.name_buffer)
+        if name:
+            self.level["name"] = name
+            self.message = f"Имя карты: {name}"
+        self.name_editing = False
+
+    def cancel_name_edit(self) -> None:
+        self.name_editing = False
+        self.message = "Ввод имени отменён"
+
+    def name_input_key(self, event: pygame.event.Event) -> None:
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            self.commit_name()
+        elif event.key == pygame.K_ESCAPE:
+            self.cancel_name_edit()
+        elif event.key == pygame.K_BACKSPACE:
+            self.name_buffer = self.name_buffer[:-1]
+        else:
+            ch = event.unicode  # учитывает текущую раскладку (рус/eng)
+            if ch and ch.isprintable() and len(self.name_buffer) < 40:
+                self.name_buffer += ch
+
     def set_mode(self, mode: str) -> None:
         self.mode = mode
         self.message = f"Режим: {MODE_LABELS.get(mode, mode)}"
 
     def on_mouse_down(self, pos: tuple[int, int], button: int) -> str | None:
         """Обработка клика мыши по UI/холсту. Возвращает 'test' для playtest."""
+        # клик во время ввода имени: по полю — оставляем фокус, иначе подтверждаем
+        if self.name_editing:
+            if button == 1 and "name" in self.ui and self.ui["name"].collidepoint(pos):
+                return None
+            self.commit_name()
+            # клик мимо поля только снимает фокус, без другого действия
+            return None
         if button == 3:
             if self.canvas.collidepoint(pos):
                 self.push_undo()
@@ -201,6 +250,8 @@ class LevelEditor:
                     return "test"
                 elif name == "mode":
                     self.dropdown_open = True
+                elif name == "name":
+                    self.start_name_edit()
                 elif name == "eraser":
                     self.eraser = not self.eraser
                     self.message = "Ластик ВКЛ (ЛКМ стирает)" if self.eraser else "Ластик ВЫКЛ"
@@ -493,7 +544,9 @@ class LevelEditor:
             print(f"[editor] load error: {e}")
 
     def save(self) -> Path:
-        path = level_io.LEVELS_DIR / f"{self.level.get('name', 'level_editor')}.json"
+        name = _sanitize_name(self.level.get("name", "")) or "level_editor"
+        self.level["name"] = name
+        path = level_io.LEVELS_DIR / f"{name}.json"
         level_io.save_level(self.level, path)
         self.message = f"Сохранено: {path.name}"
         print(f"[editor] saved → {path}")
@@ -561,6 +614,9 @@ def run_editor(level_path: str | None = None) -> None:
             elif event.type == pygame.KEYUP:
                 ed.held_sc.discard(sc(event))
             elif event.type == pygame.KEYDOWN:
+                if ed.name_editing:
+                    ed.name_input_key(event)
+                    continue
                 s = sc(event)
                 ed.held_sc.add(s)
                 if s == pygame.KSCAN_ESCAPE or event.key == pygame.K_ESCAPE:
@@ -616,7 +672,7 @@ def run_editor(level_path: str | None = None) -> None:
         # перетаскивание мыши: рисование тайлов / стирание ластиком (вне UI)
         buttons = pygame.mouse.get_pressed(3)
         mx, my = pygame.mouse.get_pos()
-        menus_open = ed.dropdown_open or ed.load_open
+        menus_open = ed.dropdown_open or ed.load_open or ed.name_editing
         if not menus_open and ed.canvas.collidepoint(mx, my):
             if buttons[0] and ed.eraser:
                 ed.erase(mx, my)
@@ -626,7 +682,7 @@ def run_editor(level_path: str | None = None) -> None:
                 ed.erase(mx, my)
 
         # камера: WASD/стрелки (scancode — любая раскладка)
-        pan = 360 * dt / ed.zoom
+        pan = 0 if ed.name_editing else 360 * dt / ed.zoom
         if ed._held(*SC_CAM_LEFT):
             ed.cam_x -= pan
         if ed._held(*SC_CAM_RIGHT):
@@ -858,12 +914,30 @@ def _draw_editor(screen, ed: LevelEditor, font, font_small, tile_surface) -> Non
     x = button("undo", "Undo", x, 50) + 5
     x = button("redo", "Redo", x, 50) + 12
     x = button("grow_up", "Выше +", x, 64) + 5
-    x = button("grow_down", "Ниже +", x, 64) + 5
+    x = button("grow_down", "Ниже +", x, 64) + 12
+
+    # --- поле ввода имени карты ---
+    nlab = font_small.render("Имя:", True, TEXT_DIM)
+    screen.blit(nlab, (x, 13))
+    nx = x + nlab.get_width() + 6
+    name_w = max(120, min(240, ed.width - nx - 12))
+    name_rect = pygame.Rect(nx, 6, name_w, 26)
+    editing = ed.name_editing
+    pygame.draw.rect(screen, (18, 22, 30), name_rect, border_radius=6)
+    pygame.draw.rect(screen, ACCENT if editing else (90, 100, 130), name_rect,
+                     2 if editing else 1, border_radius=6)
+    shown = ed.name_buffer if editing else str(ed.level.get("name", ""))
+    if editing and (pygame.time.get_ticks() // 500) % 2 == 0:
+        shown += "|"
+    # обрезаем по ширине поля
+    while shown and font_small.size(shown)[0] > name_w - 14:
+        shown = shown[1:]
+    screen.blit(font_small.render(shown, True, TEXT), (name_rect.x + 7, name_rect.centery - 7))
+    ed.ui["name"] = name_rect
 
     info = (
         f"кисть:{ed.brush}  зум:{ed.zoom:.1f}  "
-        f"размер:{ed.level['width_tiles']}x{ed.level['height_tiles']}  "
-        f"имя:{ed.level.get('name','')}"
+        f"размер:{ed.level['width_tiles']}x{ed.level['height_tiles']}"
     )
     screen.blit(font_small.render(info, True, TEXT_DIM), (10, 38))
     msg = font_small.render(ed.message, True, ACCENT)

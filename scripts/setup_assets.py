@@ -154,6 +154,28 @@ def make_player(state: str, i: int = 0, total: int = 1) -> pygame.Surface:
     return s
 
 
+def make_player_death(i: int, total: int = 8) -> pygame.Surface:
+    """Кадры смерти: персонаж падает набок (для default_player)."""
+    s = _surf(24, 24)
+    t = i / max(1, total - 1)
+    # наклон и «сплющивание» к концу
+    tilt = int(t * 6)
+    squash = int(t * 3)
+    cx, base_y = 12 + tilt // 2, 20 - squash // 2
+    body_w = max(4, 8 - squash // 2)
+    body_h = max(3, 9 - squash)
+    pygame.draw.rect(
+        s, P_SHIRT, (cx - body_w // 2, base_y - body_h - 4, body_w, body_h), border_radius=2
+    )
+    pygame.draw.circle(s, P_SKIN, (cx + tilt, base_y - body_h - 6), max(2, 4 - squash // 2))
+    if t > 0.5:
+        # «X» глаза
+        ex, ey = cx + tilt, base_y - body_h - 7
+        pygame.draw.line(s, OUTLINE, (ex - 2, ey - 1), (ex, ey + 1), 1)
+        pygame.draw.line(s, OUTLINE, (ex, ey - 1), (ex - 2, ey + 1), 1)
+    return s
+
+
 def make_tile(kind: str) -> pygame.Surface:
     s = _surf(16, 16)
     if kind == "ground":
@@ -332,6 +354,8 @@ def generate_all() -> list[str]:
         emit(make_player("run", i, 6), f"player/run_{i}.png")
     emit(make_player("jump"), "player/jump.png")
     emit(make_player("fall"), "player/fall.png")
+    for i in range(8):
+        emit(make_player_death(i, 8), f"player/death_{i}.png")
 
     # тайлы
     for kind in ("ground", "grass", "stone", "dirt"):

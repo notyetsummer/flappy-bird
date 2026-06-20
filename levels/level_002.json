@@ -3,142 +3,347 @@
   "name": "level_002",
   "tile_size": 48,
   "width_tiles": 14,
-  "height_tiles": 24,
+  "height_tiles": 26,
   "background": "default",
   "player": {
     "start_x": 48,
-    "start_y": 56,
-    "asset_set": "default_player"
+    "start_y": 152,
+    "asset_set": "pink_monster"
   },
   "level_end": {
     "x": 576,
-    "y": 1034,
+    "y": 1130,
     "type": "flag"
   },
   "tiles": [
     {
       "x": 0,
-      "y": 2,
+      "y": 4,
       "tile_id": "grass"
     },
     {
       "x": 1,
-      "y": 2,
+      "y": 4,
       "tile_id": "grass"
     },
     {
       "x": 2,
-      "y": 2,
+      "y": 4,
       "tile_id": "grass"
     },
     {
       "x": 3,
-      "y": 2,
+      "y": 4,
       "tile_id": "grass"
     },
     {
       "x": 0,
-      "y": 23,
+      "y": 25,
       "tile_id": "grass"
     },
     {
       "x": 1,
-      "y": 23,
+      "y": 25,
       "tile_id": "grass"
     },
     {
       "x": 2,
-      "y": 23,
+      "y": 25,
       "tile_id": "grass"
     },
     {
       "x": 3,
-      "y": 23,
+      "y": 25,
       "tile_id": "grass"
     },
     {
       "x": 4,
-      "y": 23,
+      "y": 25,
       "tile_id": "grass"
     },
     {
       "x": 5,
-      "y": 23,
+      "y": 25,
       "tile_id": "grass"
     },
     {
       "x": 6,
-      "y": 23,
+      "y": 25,
       "tile_id": "grass"
     },
     {
       "x": 7,
-      "y": 23,
+      "y": 25,
       "tile_id": "grass"
     },
     {
       "x": 8,
-      "y": 23,
+      "y": 25,
       "tile_id": "grass"
     },
     {
       "x": 9,
-      "y": 23,
+      "y": 25,
       "tile_id": "grass"
     },
     {
       "x": 10,
-      "y": 23,
+      "y": 25,
       "tile_id": "grass"
     },
     {
       "x": 11,
-      "y": 23,
+      "y": 25,
       "tile_id": "grass"
     },
     {
       "x": 12,
-      "y": 23,
+      "y": 25,
       "tile_id": "grass"
     },
     {
       "x": 13,
+      "y": 25,
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
+      "y": 5,
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
+      "y": 6,
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
+      "y": 7,
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
+      "y": 8,
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
+      "y": 9,
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
+      "y": 10,
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
+      "y": 11,
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
+      "y": 12,
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
+      "y": 13,
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
+      "y": 14,
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
+      "y": 15,
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
+      "y": 16,
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
+      "y": 18,
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
+      "y": 17,
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
+      "y": 19,
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
+      "y": 20,
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
+      "y": 21,
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
+      "y": 22,
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
       "y": 23,
-      "tile_id": "grass"
+      "tile_id": "ground"
+    },
+    {
+      "x": 0,
+      "y": 24,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 24,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 23,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 22,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 21,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 20,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 19,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 18,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 17,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 16,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 15,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 14,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 13,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 12,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 11,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 10,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 4,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 5,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 6,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 7,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 8,
+      "tile_id": "ground"
+    },
+    {
+      "x": 13,
+      "y": 9,
+      "tile_id": "ground"
     }
   ],
   "platforms": [
     {
       "x": 330,
-      "y": 260,
+      "y": 356,
       "width": 150,
       "height": 24,
       "tile_id": "stone"
     },
     {
       "x": 70,
-      "y": 430,
+      "y": 526,
       "width": 150,
       "height": 24,
       "tile_id": "stone"
     },
     {
       "x": 380,
-      "y": 600,
+      "y": 696,
       "width": 150,
       "height": 24,
       "tile_id": "stone"
     },
     {
       "x": 110,
-      "y": 780,
+      "y": 876,
       "width": 170,
       "height": 24,
       "tile_id": "stone"
     },
     {
       "x": 420,
-      "y": 950,
+      "y": 1046,
       "width": 160,
       "height": 24,
       "tile_id": "stone"
@@ -148,51 +353,45 @@
   "items": [
     {
       "x": 110,
-      "y": 90,
+      "y": 186,
       "item_type": "coin",
       "asset_id": "coin"
     },
     {
       "x": 405,
-      "y": 235,
+      "y": 331,
       "item_type": "coin",
       "asset_id": "coin"
     },
     {
       "x": 150,
-      "y": 405,
+      "y": 501,
       "item_type": "coin",
       "asset_id": "coin"
     },
     {
       "x": 455,
-      "y": 575,
+      "y": 671,
       "item_type": "coin",
       "asset_id": "coin"
     },
     {
       "x": 190,
-      "y": 755,
+      "y": 851,
       "item_type": "coin",
       "asset_id": "coin"
     },
     {
       "x": 495,
-      "y": 925,
+      "y": 1021,
       "item_type": "coin",
       "asset_id": "coin"
-    },
-    {
-      "x": 650,
-      "y": 1060,
-      "item_type": "gem",
-      "asset_id": "gem"
     }
   ],
   "obstacles": [
     {
       "x": 240,
-      "y": 1086,
+      "y": 1182,
       "width": 48,
       "height": 18,
       "obstacle_type": "spikes",
@@ -200,7 +399,7 @@
     },
     {
       "x": 288,
-      "y": 1086,
+      "y": 1182,
       "width": 48,
       "height": 18,
       "obstacle_type": "spikes",
@@ -208,7 +407,7 @@
     },
     {
       "x": 336,
-      "y": 1086,
+      "y": 1182,
       "width": 48,
       "height": 18,
       "obstacle_type": "spikes",
@@ -218,18 +417,18 @@
   "saws": [
     {
       "x1": 230,
-      "y1": 520,
+      "y1": 616,
       "x2": 470,
-      "y2": 520,
+      "y2": 616,
       "r": 26,
       "period": 2.4,
       "phase": 0.0
     },
     {
       "x1": 300,
-      "y1": 650,
+      "y1": 746,
       "x2": 300,
-      "y2": 880,
+      "y2": 976,
       "r": 24,
       "period": 2.0,
       "phase": 3.14159

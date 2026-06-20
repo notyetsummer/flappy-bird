@@ -13,14 +13,47 @@ import pygame
 
 from . import asset_loader
 
+def _player_skin_paths(
+    folder: str,
+    *,
+    multi_jump: bool = False,
+    death_frames: int = 8,
+) -> dict[str, list[str]]:
+    """Пути кадров игрока внутри assets/player/ или assets/player/<folder>/."""
+    base = f"player/{folder}" if folder else "player"
+    jump = (
+        [f"{base}/jump_{i}.png" for i in range(4)]
+        if multi_jump
+        else [f"{base}/jump.png"]
+    )
+    fall = (
+        [f"{base}/fall_{i}.png" for i in range(4)]
+        if multi_jump
+        else [f"{base}/fall.png"]
+    )
+    return {
+        "idle": [f"{base}/idle_{i}.png" for i in range(4)],
+        "run": [f"{base}/run_{i}.png" for i in range(6)],
+        "jump": jump,
+        "fall": fall,
+        "death": [f"{base}/death_{i}.png" for i in range(death_frames)],
+    }
+
+
+# Скин по умолчанию для встроенных уровней и уровней без asset_set
+DEFAULT_PLAYER_SKIN = "pink_monster"
+
+# Скины игрока: id → состояния анимации → файлы (относительно assets/)
+PLAYER_SKINS: dict[str, dict[str, list[str]]] = {
+    "default_player": _player_skin_paths("", multi_jump=False),
+    "pink_monster": _player_skin_paths("pink_monster", multi_jump=True),
+    "owlet_monster": _player_skin_paths("owlet_monster", multi_jump=True),
+    "dude_monster": _player_skin_paths("dude_monster", multi_jump=True),
+}
+
 # Соответствия сущность → путь(и) ассета (относительно assets/)
 ASSETS: dict[str, dict] = {
-    "player": {
-        "idle": [f"player/idle_{i}.png" for i in range(4)],
-        "run": [f"player/run_{i}.png" for i in range(6)],
-        "jump": ["player/jump.png"],
-        "fall": ["player/fall.png"],
-    },
+    "player": PLAYER_SKINS[DEFAULT_PLAYER_SKIN],
     "tiles": {
         "ground": "tiles/ground.png",
         "grass": "tiles/grass.png",
@@ -82,8 +115,10 @@ class AssetManager:
         return cached
 
     # --- удобные геттеры по реестру ---
-    def player_frames(self, state: str) -> list[pygame.Surface]:
-        paths = ASSETS["player"].get(state) or ASSETS["player"]["idle"]
+    def player_frames(self, state: str, skin: str | None = None) -> list[pygame.Surface]:
+        skin = skin or DEFAULT_PLAYER_SKIN
+        spec = PLAYER_SKINS.get(skin) or PLAYER_SKINS[DEFAULT_PLAYER_SKIN]
+        paths = spec.get(state) or spec["idle"]
         return self.frames(paths)
 
     def tile(self, tile_id: str) -> pygame.Surface:

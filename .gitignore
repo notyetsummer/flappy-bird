@@ -19,3 +19,4 @@ Results.txt
 # Готовые карты в levels/*.json коммитятся и передаются между игроками как файлы.
 levels/_editor_test_level.json
 levels/level_editor.json
+assets/raw_downloads/

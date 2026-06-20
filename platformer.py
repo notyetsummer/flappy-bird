@@ -23,9 +23,10 @@ DEBUG_DRAW_HITBOXES = False
 
 # Слой ассетов подключается лениво и безопасно: если его нет — рисуем примитивы.
 try:
-    from src.assets.asset_registry import get_asset_manager as _get_asset_manager
+    from src.assets.asset_registry import DEFAULT_PLAYER_SKIN, get_asset_manager as _get_asset_manager
 except Exception:  # noqa: BLE001 — отсутствие ассет-слоя не должно ронять игру
     _get_asset_manager = None  # type: ignore[assignment]
+    DEFAULT_PLAYER_SKIN = "pink_monster"
 
 # --- цвета ---
 SKY = (135, 206, 235)
@@ -83,6 +84,29 @@ class Feel:
     JUMP_BUFFER = 0.12
     PLAYER_W = 28
     PLAYER_H = 36
+
+
+# Длительность кадров анимации игрока (секунды, не FPS).
+# Idle: асимметричный цикл «дыхания» ~1.4 с — 400/300/400/300 ms на кадр
+# (рекомендации pixel-art: sprite-ai.art/guides/animation-principles).
+PLAYER_ANIM_DURATIONS: dict[str, list[float]] = {
+    "idle": [0.40, 0.30, 0.40, 0.30],
+    "run": [0.10, 0.10, 0.10, 0.10, 0.10, 0.10],
+    "jump": [0.08, 0.10, 0.14, 0.10],
+    "fall": [0.10, 0.12, 0.14, 0.12],
+    "death": [0.09, 0.09, 0.10, 0.10, 0.11, 0.12, 0.14, 0.18],
+}
+PLAYER_ANIM_FRAME_COUNTS: dict[str, int] = {
+    "idle": 4,
+    "run": 6,
+    "jump": 4,
+    "fall": 4,
+    "death": 8,
+}
+PLAYER_ANIM_DEFAULT_DURATION = 0.15
+# Допуск «стояния на полу» (px): без него feet=492 и platform.top=492
+# не дают colliderect, гравитация дёргает персонажа idle↔fall каждый кадр.
+GROUND_SNAP = 3
 
 
 @dataclass
@@ -252,6 +276,7 @@ class LevelData:
     plat_color: tuple[int, int, int] = PLATFORM
     plat_top_color: tuple[int, int, int] = PLATFORM_TOP
     background: str | None = None  # id фонового спрайта (если есть ассеты)
+    player_asset_set: str = DEFAULT_PLAYER_SKIN
 
 
 def level_1() -> LevelData:
@@ -646,7 +671,10 @@ class Player:
         self.anim_state = "idle"
         self.frame_index = 0
         self.anim_timer = 0.0
+        self.anim_step = 1  # ping-pong для idle (+1 вперёд, −1 назад)
         self.facing_right = True
+        self.death_cause: str | None = None
+        self.death_anim_done = False
 
     @property
     def rect(self) -> pygame.Rect:
@@ -942,6 +970,12 @@ class PlatformerGame:
             if self.complete_timer > 0.4:
                 pass
         elif self.state == GameState.DEAD:
+            if (
+                self.level is not None
+                and self.player.death_cause == "saw"
+                and not self.player.death_anim_done
+            ):
+                self._update_death_anim(dt)
             self.death_timer += dt
 
     def update_playing(self, dt: float) -> None:
@@ -1006,17 +1040,22 @@ class PlatformerGame:
             p.jump_held = True
 
         # --- гравитация (по текущему направлению; паверап уменьшает вдвое) ---
-        grav = Feel.GRAVITY
-        if p.low_grav_timer > 0:
-            grav *= 0.5
-        if p.vy * g > 0:  # падение по направлению гравитации — усиливаем дугу
-            grav *= Feel.FALL_GRAVITY_MULT
-        p.vy += grav * g
-        p.vy = max(-Feel.MAX_FALL, min(Feel.MAX_FALL, p.vy))
+        # На земле не накапливаем микро-vy — иначе каждый кадр «отлипаем» от пола.
+        if p.on_ground and p.vy * g >= 0:
+            p.vy = 0.0
+        else:
+            grav = Feel.GRAVITY
+            if p.low_grav_timer > 0:
+                grav *= 0.5
+            if p.vy * g > 0:  # падение по направлению гравитации — усиливаем дугу
+                grav *= Feel.FALL_GRAVITY_MULT
+            p.vy += grav * g
+            p.vy = max(-Feel.MAX_FALL, min(Feel.MAX_FALL, p.vy))
 
         # --- интеграция + коллизии ---
         self.move_axis(p, p.vx, "x")
         self.move_axis(p, p.vy, "y")
+        self._resolve_ground_contact(p)
 
         # падение в бездну (в любую сторону при перевёрнутой гравитации)
         world_h = getattr(self.level, "world_h", H)
@@ -1096,7 +1135,7 @@ class PlatformerGame:
         for saw in self.level.saws:
             cx, cy = saw.pos(self.level_time)
             if circle_rect_hit(cx, cy, saw.r * 0.82, pr):
-                self.kill_player()
+                self.kill_player(cause="saw")
                 return
         for pj in self.projectiles:
             if circle_rect_hit(pj.x, pj.y, pj.r, pr):
@@ -1118,7 +1157,7 @@ class PlatformerGame:
                 return
 
         # анимация игрока (визуал)
-        self._update_player_anim(dt)
+        self._update_player_anim(dt, moving=want != 0)
 
         # цель
         if self.level.goal and pr.colliderect(self.level.goal.rect):
@@ -1168,33 +1207,129 @@ class PlatformerGame:
         if p.x + p.w > self.level.world_w:
             p.x = self.level.world_w - p.w
 
-    def kill_player(self) -> None:
-        self.player.dead = True
+    def _resolve_ground_contact(self, p: Player) -> None:
+        """Привязка к полу/потолку с допуском — стабильный on_ground без дрожания."""
+        assert self.level is not None
+        solids = [plat.rect for plat in self.level.platforms]
+        solids.extend(g.rect for g in self.level.gates if not g.opened)
+        pr = p.rect
+        g = p.gravity_dir
+
+        if g > 0:
+            landed = False
+            for pl in solids:
+                if (
+                    pr.right > pl.left
+                    and pr.left < pl.right
+                    and pr.top < pl.bottom
+                    and pl.top - GROUND_SNAP <= pr.bottom <= pl.top + GROUND_SNAP
+                ):
+                    p.y = pl.top - p.h
+                    landed = True
+                    break
+            p.on_ground = landed
+            if landed and p.vy > 0:
+                p.vy = 0.0
+            return
+
+        # гравитация вверх — «пол» на потолке
+        on_ceiling = False
+        for pl in solids:
+            if (
+                pr.right > pl.left
+                and pr.left < pl.right
+                and pr.bottom > pl.top
+                and pl.bottom - GROUND_SNAP <= pr.top <= pl.bottom + GROUND_SNAP
+            ):
+                p.y = pl.bottom
+                on_ceiling = True
+                break
+        p.on_ground = on_ceiling
+        if on_ceiling and p.vy < 0:
+            p.vy = 0.0
+
+    def kill_player(self, cause: str | None = None) -> None:
+        p = self.player
+        p.dead = True
+        p.death_cause = cause
+        p.death_anim_done = False
+        if cause == "saw":
+            p.vx = 0.0
+            p.vy = 0.0
+            p.anim_state = "death"
+            p.frame_index = 0
+            p.anim_timer = 0.0
         self.state = GameState.DEAD
         self.death_timer = 0.0
 
-    def _update_player_anim(self, dt: float) -> None:
+    def _update_death_anim(self, dt: float) -> None:
+        p = self.player
+        skin = getattr(self.level, "player_asset_set", DEFAULT_PLAYER_SKIN)
+        if self.assets is not None:
+            n = len(self.assets.player_frames("death", skin=skin))
+        else:
+            n = PLAYER_ANIM_FRAME_COUNTS["death"]
+        p.anim_timer += dt
+        duration = self._frame_duration("death", p.frame_index)
+        if p.anim_timer < duration:
+            return
+        p.anim_timer -= duration
+        if p.frame_index < n - 1:
+            p.frame_index += 1
+        else:
+            p.death_anim_done = True
+
+    def _frame_duration(self, state: str, frame_index: int) -> float:
+        durs = PLAYER_ANIM_DURATIONS.get(state)
+        if not durs:
+            return PLAYER_ANIM_DEFAULT_DURATION
+        return durs[frame_index % len(durs)]
+
+    def _advance_anim_frame(self, p: Player) -> None:
+        n = PLAYER_ANIM_FRAME_COUNTS.get(p.anim_state, 4)
+        if p.anim_state == "death":
+            if p.frame_index < n - 1:
+                p.frame_index += 1
+            return
+        if p.anim_state == "idle" and n > 1:
+            nxt = p.frame_index + p.anim_step
+            if nxt >= n - 1:
+                p.frame_index = n - 1
+                p.anim_step = -1
+            elif nxt <= 0:
+                p.frame_index = 0
+                p.anim_step = 1
+            else:
+                p.frame_index = nxt
+        else:
+            p.frame_index = (p.frame_index + 1) % max(1, n)
+
+    def _update_player_anim(self, dt: float, *, moving: bool) -> None:
         p = self.player
         if abs(p.vx) > 0.3:
             p.facing_right = p.vx > 0
-        # состояние по физике (учитываем направление гравитации для падения)
-        falling = p.vy * p.gravity_dir > 0.5
-        rising = p.vy * p.gravity_dir < -0.5
-        if not p.on_ground and (rising or falling):
-            new_state = "jump" if rising else "fall"
-        elif abs(p.vx) > 0.6:
-            new_state = "run"
+        g = p.gravity_dir
+        if p.on_ground:
+            new_state = "run" if moving and abs(p.vx) > 0.15 else "idle"
         else:
-            new_state = "idle"
+            rising = p.vy * g < -0.5
+            falling = p.vy * g > 0.5
+            if rising:
+                new_state = "jump"
+            elif falling:
+                new_state = "fall"
+            else:
+                new_state = "jump"
         if new_state != p.anim_state:
             p.anim_state = new_state
             p.frame_index = 0
             p.anim_timer = 0.0
+            p.anim_step = 1
         p.anim_timer += dt
-        speed = 0.07 if new_state == "run" else 0.22
-        if p.anim_timer >= speed:
-            p.anim_timer -= speed
-            p.frame_index += 1
+        duration = self._frame_duration(p.anim_state, p.frame_index)
+        if p.anim_timer >= duration:
+            p.anim_timer -= duration
+            self._advance_anim_frame(p)
 
     def draw(self) -> None:
         if self.state == GameState.LEVEL_SELECT:
@@ -1427,8 +1562,13 @@ class PlatformerGame:
         player_drawn = False
         if use_sprites:
             try:
-                frames = self.assets.player_frames(self.player.anim_state)
-                fr = frames[self.player.frame_index % len(frames)]
+                skin = getattr(self.level, "player_asset_set", DEFAULT_PLAYER_SKIN)
+                frames = self.assets.player_frames(self.player.anim_state, skin=skin)
+                if self.player.anim_state == "death":
+                    idx = min(self.player.frame_index, len(frames) - 1)
+                else:
+                    idx = self.player.frame_index % len(frames)
+                fr = frames[idx]
                 spr = self.assets.scaled(fr, (pr.w + 8, pr.h + 4))
                 if not self.player.facing_right:
                     spr = pygame.transform.flip(spr, True, False)
@@ -1458,7 +1598,8 @@ class PlatformerGame:
                 "Enter — к списку уровней",
             )
         elif self.state == GameState.DEAD:
-            self.draw_overlay("Вы погибли", "", "R / Enter — заново")
+            if self.player.death_anim_done or self.player.death_cause != "saw":
+                self.draw_overlay("Вы погибли", "", "R / Enter — заново")
 
     def draw_hud(self) -> None:
         assert self.level is not None
@@ -1616,13 +1757,15 @@ def run_platformer_session(
                 pygame.display.set_caption(restore_caption)
 
 
-def run_level_file(level_path: str) -> None:
+def run_level_file(level_path: str, player_skin: str | None = None) -> None:
     """Запустить игру сразу в уровне из JSON-файла (--level)."""
     from src.levels import level_io
 
     game = PlatformerGame()
     try:
         level = level_io.dict_to_leveldata(level_io.load_level_file(level_path))
+        if player_skin:
+            level.player_asset_set = player_skin
         game.play_level_data(level)
     except ValueError as e:
         print(f"[level] Ошибка загрузки уровня: {e}")
@@ -1636,6 +1779,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Pygame платформер")
     parser.add_argument("--editor", action="store_true", help="запустить редактор уровней")
     parser.add_argument("--level", metavar="PATH", help="запустить уровень из JSON")
+    parser.add_argument(
+        "--skin",
+        metavar="ID",
+        help="скин игрока (default_player, pink_monster, owlet_monster, dude_monster)",
+    )
     parser.add_argument("--debug-hitboxes", action="store_true", help="показывать хитбоксы")
     args = parser.parse_args()
 
@@ -1649,7 +1797,7 @@ def main() -> None:
         run_editor()
         return
     if args.level:
-        run_level_file(args.level)
+        run_level_file(args.level, player_skin=args.skin)
         return
     run_platformer_session()
 

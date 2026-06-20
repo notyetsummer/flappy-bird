@@ -8,7 +8,7 @@
   "player": {
     "start_x": 48,
     "start_y": 440,
-    "asset_set": "default_player"
+    "asset_set": "pink_monster"
   },
   "level_end": {
     "x": 1776,
